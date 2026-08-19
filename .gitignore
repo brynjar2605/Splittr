@@ -4,3 +4,6 @@ build-*/
 *.part
 .vscode/
 .idea/
+.cache/
+compile_commands.json
+design_handoff_stemsplit_bench_dark/assets/
