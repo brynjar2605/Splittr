@@ -34,8 +34,18 @@ target_sources(Splittr PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
     src/ui/HeaderBar.cpp
+    src/ui/MatrixBar.cpp
+    src/ui/IdleDropView.cpp
+    src/ui/DownloadView.cpp
+    src/ui/WorkingView.cpp
+    src/ui/StemRowComponent.cpp
+    src/ui/DoneView.cpp
     src/engine/AudioFileIO.cpp
-    src/engine/DemucsSeparator.cpp)
+    src/engine/DemucsSeparator.cpp
+    src/engine/SeparationEngine.cpp
+    src/engine/ModelManager.cpp
+    src/engine/StemCache.cpp
+    src/engine/AuditionPlayer.cpp)
 
 target_include_directories(Splittr PRIVATE src)
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "engine/SeparationEngine.h"
+#include "engine/AuditionPlayer.h"
 
 class SplittrAudioProcessor : public juce::AudioProcessor
 {
@@ -30,6 +32,12 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    splittr::SeparationEngine& getEngine() { return engine; }
+    splittr::AuditionPlayer& getAudition() { return audition; }
+
 private:
+    splittr::SeparationEngine engine;
+    splittr::AuditionPlayer audition { engine.fileIO().formats() };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessor)
 };
