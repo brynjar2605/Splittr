@@ -15,6 +15,15 @@ namespace
     }
 } // namespace
 
+int DemucsSeparator::expectedSegments (int numSamples)
+{
+    const auto segment = (int) (demucscpp::SEGMENT_LEN_SECS * demucscpp::SUPPORTED_SAMPLE_RATE);
+    const auto stride = (int) ((1.0f - demucscpp::OVERLAP) * (float) segment);
+    const auto perPass = juce::jmax (1, (numSamples + stride - 1) / stride);
+
+    return 2 * perPass; // two shift passes
+}
+
 DemucsSeparator::Status DemucsSeparator::separate (const juce::File& modelFile,
                                                    const juce::AudioBuffer<float>& stereo44k,
                                                    const std::function<void (float, const juce::String&)>& onProgress,

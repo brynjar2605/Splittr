@@ -32,6 +32,10 @@ public:
                             const std::function<bool()>& shouldContinue,
                             SeparationResult& out,
                             juce::String& error);
+
+    // Rough number of progress-callback segments inference will report
+    // (7.8 s windows, 25% overlap, 2 shift passes) — for "seg i/j" UI copy.
+    static int expectedSegments (int numSamples);
 };
 
 } // namespace splittr
