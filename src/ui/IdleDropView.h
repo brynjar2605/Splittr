@@ -19,13 +19,15 @@ public:
     std::function<void()> onBrowse;
     std::function<void (Quality)> onQualityChange;
     std::function<void (theme::Mode)> onModeChange;
-    std::function<void (theme::Accent)> onAccentChange;
+    std::function<void (float, bool)> onAccentHueChange; // (hue 0..1, commit)
 
     void setDragOver (bool);
     void setErrorMessage (const juce::String&);
     void setQuality (Quality);
 
     void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
@@ -40,10 +42,13 @@ private:
     drawSwitch (juce::Graphics&, int x, int y, const juce::String& a, const juce::String& b,
                 bool bActive, int hoverIdA, int hoverIdB, int cellWidth) const;
 
-    juce::Rectangle<int> fastBounds, bestBounds;       // computed in paint
-    juce::Rectangle<int> darkBounds, lightBounds;      //
-    juce::Rectangle<int> purpleBounds, pinkBounds;     //
-    int hoveredOption = 0; // 0 none, 1 fast, 2 best, 3 dark, 4 light, 5 purple, 6 pink
+    void sendHue (const juce::MouseEvent&, bool commit);
+
+    juce::Rectangle<int> fastBounds, bestBounds;  // computed in paint
+    juce::Rectangle<int> darkBounds, lightBounds; //
+    juce::Rectangle<int> hueStripBounds;          //
+    bool draggingHue = false;
+    int hoveredOption = 0; // 0 none, 1 fast, 2 best, 3 dark, 4 light
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IdleDropView)
 };

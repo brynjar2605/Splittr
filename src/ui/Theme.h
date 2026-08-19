@@ -49,14 +49,15 @@ inline juce::Colour border35 = rgba (221, 214, 230, 0.35f);
 
 // --- theme selection ------------------------------------------------------
 enum class Mode { dark, light };
-enum class Accent { purple, pink };
 
 Mode currentMode();
-Accent currentAccent();
+float currentAccentHue(); // 0..1 (juce hue); default = the design purple
+float defaultAccentHue();
 
-// Rebuild every token above for the given mode/accent, persist the choice,
-// and return. Callers must repaint afterwards.
-void apply (Mode, Accent);
+// Rebuild every token above for the given mode/accent hue. Callers must
+// repaint afterwards. persist=false skips the Settings.xml write (use for
+// live drag preview; commit with persist=true on release).
+void apply (Mode, float accentHue, bool persist = true);
 
 // Read the persisted choice (Settings.xml) and apply it. Cheap; call from
 // editor construction.

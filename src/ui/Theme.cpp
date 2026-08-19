@@ -7,16 +7,14 @@ namespace splittr::theme
 namespace
 {
     Mode mode = Mode::dark;
-    Accent accentChoice = Accent::purple;
+    float accentHue = -1.0f; // set on first apply/load
 
-    // Rotate the design's purple ladder to pink; darken slightly in light
-    // mode so the accents keep contrast on paper.
+    // The design's purple ladder; every accent is this shade with the hue
+    // swapped for the user's choice (slightly darkened in light mode so the
+    // accents keep contrast on paper).
     juce::Colour accentBase (juce::uint32 purpleArgb)
     {
-        auto c = juce::Colour (purpleArgb);
-
-        if (accentChoice == Accent::pink)
-            c = c.withRotatedHue (0.135f); // ~300deg -> ~350deg (pink)
+        auto c = juce::Colour (purpleArgb).withHue (accentHue);
 
         if (mode == Mode::light)
             c = c.withMultipliedBrightness (0.78f).withMultipliedSaturation (1.15f);
@@ -26,12 +24,18 @@ namespace
 } // namespace
 
 Mode currentMode() { return mode; }
-Accent currentAccent() { return accentChoice; }
+float currentAccentHue() { return accentHue >= 0.0f ? accentHue : defaultAccentHue(); }
 
-void apply (Mode newMode, Accent newAccent)
+float defaultAccentHue()
+{
+    static const float hue = juce::Colour (0xff9C63EE).getHue();
+    return hue;
+}
+
+void apply (Mode newMode, float newAccentHue, bool persist)
 {
     mode = newMode;
-    accentChoice = newAccent;
+    accentHue = juce::jlimit (0.0f, 1.0f, newAccentHue);
 
     // ink = the neutral used for text/lines/panels at various alphas
     const auto ink = [] (float a)
@@ -72,18 +76,26 @@ void apply (Mode newMode, Accent newAccent)
     lineSoft10 = ink (0.10f);
     border35 = ink (0.35f);
 
-    // persist
-    ModelManager::setUiSetting ("uiMode", mode == Mode::light ? "light" : "dark");
-    ModelManager::setUiSetting ("uiAccent", accentChoice == Accent::pink ? "pink" : "purple");
+    if (persist)
+    {
+        ModelManager::setUiSetting ("uiMode", mode == Mode::light ? "light" : "dark");
+        ModelManager::setUiSetting ("uiAccentHue", juce::String (accentHue, 4));
+    }
 }
 
 void loadFromSettings()
 {
     const auto m = ModelManager::getUiSetting ("uiMode", "dark") == "light" ? Mode::light : Mode::dark;
-    const auto a = ModelManager::getUiSetting ("uiAccent", "purple") == "pink" ? Accent::pink : Accent::purple;
 
-    if (m != mode || a != accentChoice || true)
-        apply (m, a);
+    auto hueSetting = ModelManager::getUiSetting ("uiAccentHue", "");
+
+    // migrate the old purple/pink two-way setting
+    if (hueSetting.isEmpty())
+        hueSetting = ModelManager::getUiSetting ("uiAccent", "") == "pink"
+                         ? juce::String (defaultAccentHue() + 0.135f, 4)
+                         : juce::String (defaultAccentHue(), 4);
+
+    apply (m, hueSetting.getFloatValue(), false);
 }
 
 } // namespace splittr::theme

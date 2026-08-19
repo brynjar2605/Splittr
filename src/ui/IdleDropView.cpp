@@ -93,7 +93,7 @@ void IdleDropView::paint (juce::Graphics& g)
                     juce::Justification::centredRight);
     }
 
-    // --- THEME / ACCENT row below the drop panel ---
+    // --- THEME switch / ACCENT hue strip below the drop panel ---
     {
         const auto y = getHeight() - 14 - 22;
 
@@ -102,12 +102,33 @@ void IdleDropView::paint (juce::Graphics& g)
             drawSwitch (g, x1, y, "DARK", "LIGHT", theme::currentMode() == theme::Mode::light,
                         3, 4, 54);
 
-        const auto accentLabelX = getWidth() - 16 - 2 * 62
+        // hue strip: full spectrum, click or drag to pick the accent colour
+        constexpr int stripW = 168;
+        const auto accentLabelX = getWidth() - 16 - stripW
                                   - ((int) ui::textWidth (labelFont, "ACCENT") + 12);
         const auto x2 = drawLabel ("ACCENT", accentLabelX, y);
-        std::tie (purpleBounds, pinkBounds) =
-            drawSwitch (g, x2, y, "PURPLE", "PINK",
-                        theme::currentAccent() == theme::Accent::pink, 5, 6, 62);
+
+        hueStripBounds = { x2, y, stripW, 22 };
+
+        const auto sat = 0.72f;
+        const auto bri = theme::currentMode() == theme::Mode::dark ? 0.92f : 0.80f;
+
+        for (int i = 0; i < stripW; ++i)
+        {
+            g.setColour (juce::Colour::fromHSV ((float) i / (float) stripW, sat, bri, 1.0f));
+            g.fillRect (hueStripBounds.getX() + i, y + 1, 1, 20);
+        }
+
+        g.setColour (theme::lineStrong);
+        g.drawRect (hueStripBounds, 1);
+
+        // marker at the current hue
+        const auto markerX = hueStripBounds.getX()
+                             + (int) (theme::currentAccentHue() * (float) stripW);
+        g.setColour (theme::bg);
+        g.fillRect (markerX - 2, y - 2, 5, 26);
+        g.setColour (theme::accentMid);
+        g.fillRect (markerX - 1, y - 2, 3, 26);
     }
 
     auto panel = getLocalBounds().withTrimmedTop (30).withTrimmedBottom (30).reduced (16, 14).toFloat();
@@ -153,8 +174,38 @@ void IdleDropView::paint (juce::Graphics& g)
 
 }
 
+void IdleDropView::sendHue (const juce::MouseEvent& e, bool commit)
+{
+    if (onAccentHueChange != nullptr)
+        onAccentHueChange (juce::jlimit (0.0f, 1.0f,
+                                         (float) (e.x - hueStripBounds.getX())
+                                             / (float) hueStripBounds.getWidth()),
+                           commit);
+}
+
+void IdleDropView::mouseDown (const juce::MouseEvent& e)
+{
+    draggingHue = hueStripBounds.contains (e.getPosition());
+
+    if (draggingHue)
+        sendHue (e, false);
+}
+
+void IdleDropView::mouseDrag (const juce::MouseEvent& e)
+{
+    if (draggingHue)
+        sendHue (e, false);
+}
+
 void IdleDropView::mouseUp (const juce::MouseEvent& e)
 {
+    if (draggingHue)
+    {
+        sendHue (e, true); // commit -> persisted
+        draggingHue = false;
+        return;
+    }
+
     const auto p = e.getPosition();
 
     if (fastBounds.contains (p) || bestBounds.contains (p))
@@ -171,14 +222,6 @@ void IdleDropView::mouseUp (const juce::MouseEvent& e)
         return;
     }
 
-    if (purpleBounds.contains (p) || pinkBounds.contains (p))
-    {
-        if (onAccentChange != nullptr)
-            onAccentChange (purpleBounds.contains (p) ? theme::Accent::purple
-                                                      : theme::Accent::pink);
-        return;
-    }
-
     if (onBrowse != nullptr && getLocalBounds().contains (p))
         onBrowse();
 }
@@ -191,9 +234,7 @@ void IdleDropView::mouseMove (const juce::MouseEvent& e)
                         : bestBounds.contains (p) ? 2
                         : darkBounds.contains (p) ? 3
                         : lightBounds.contains (p) ? 4
-                        : purpleBounds.contains (p) ? 5
-                        : pinkBounds.contains (p) ? 6
-                                                  : 0;
+                                                   : 0;
     if (option != hoveredOption)
     {
         hoveredOption = option;

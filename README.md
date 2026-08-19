@@ -51,8 +51,9 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
 - **EXPORT…** (done screen) copies all five stems, named
   `<song> - <Stem>.wav`, to a folder you choose (remembered for next time);
   **REVEAL** opens the internal cache in Finder.
-- **THEME / ACCENT** switches (idle screen): dark or light UI, purple or pink
-  accent. Preferences are global and persist.
+- **THEME / ACCENT** (idle screen): dark or light UI, plus a full-spectrum
+  hue strip — click or drag to recolor every accent in the plugin live.
+  Preferences are global and persist.
 - BPM/key detection is a hint (onset autocorrelation + chromagram): reliable
   on steady-tempo tonal material, approximate on rubato or atonal tracks.
 - Input: wav / aiff / mp3 / flac / m4a / ogg, up to 10 minutes (v1 limit).

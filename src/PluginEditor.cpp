@@ -34,13 +34,13 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
 
     idleView.onModeChange = [this] (splittr::theme::Mode m)
     {
-        splittr::theme::apply (m, splittr::theme::currentAccent());
+        splittr::theme::apply (m, splittr::theme::currentAccentHue());
         repaint();
     };
 
-    idleView.onAccentChange = [this] (splittr::theme::Accent a)
+    idleView.onAccentHueChange = [this] (float hue, bool commit)
     {
-        splittr::theme::apply (splittr::theme::currentMode(), a);
+        splittr::theme::apply (splittr::theme::currentMode(), hue, commit);
         repaint();
     };
 
