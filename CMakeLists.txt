@@ -10,8 +10,50 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_subdirectory(third_party/JUCE)
 include(cmake/DemucsCpp.cmake)
 
-# --- Engine sources shared between the CLI and the plugin (no GUI deps) ---
-set(STEMSPLIT_ENGINE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/engine")
+# --- Bundled assets (fonts) ---
+juce_add_binary_data(SplittrAssets SOURCES
+    assets/fonts/DMMono-Regular.ttf
+    assets/fonts/DMMono-Medium.ttf)
+
+# --- The plugin ---
+juce_add_plugin(Splittr
+    PRODUCT_NAME "Splittr"
+    COMPANY_NAME "Brynjar"
+    BUNDLE_ID com.brynjar.splittr
+    PLUGIN_MANUFACTURER_CODE Brnj
+    PLUGIN_CODE Spl1
+    FORMATS AU VST3 Standalone
+    AU_MAIN_TYPE kAudioUnitType_Effect
+    VST3_CATEGORIES Fx Tools
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    COPY_PLUGIN_AFTER_BUILD TRUE)
+
+target_sources(Splittr PRIVATE
+    src/PluginProcessor.cpp
+    src/PluginEditor.cpp
+    src/ui/HeaderBar.cpp
+    src/engine/AudioFileIO.cpp
+    src/engine/DemucsSeparator.cpp)
+
+target_include_directories(Splittr PRIVATE src)
+
+target_compile_definitions(Splittr PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_DISPLAY_SPLASH_SCREEN=0)
+
+target_link_libraries(Splittr PRIVATE
+    SplittrAssets
+    demucs_cpp
+    juce::juce_audio_utils
+    juce::juce_audio_formats
+    juce::juce_gui_extra
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags)
 
 # --- CLI test harness (M1): proves the separation engine before plugin work ---
 juce_add_console_app(splittr_cli PRODUCT_NAME "splittr_cli")
