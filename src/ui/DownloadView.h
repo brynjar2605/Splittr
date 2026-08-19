@@ -33,7 +33,7 @@ private:
                                  theme::line, theme::text55 };
 
     bool downloading = false;
-    juce::String captionLeft, message;
+    juce::String captionLeft, message, copyLine;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DownloadView)
 };

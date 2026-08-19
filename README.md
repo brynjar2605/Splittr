@@ -43,6 +43,10 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
 
 ## Usage notes
 
+- **ENGINE toggle** (idle screen): **FAST** uses plain htdemucs (~realtime);
+  **BEST** uses the fine-tuned `htdemucs_ft` ensemble — four specialist
+  models, one per source — for noticeably cleaner stems at ~4× the time.
+  BEST downloads its 4 × 84 MB weights once on first use.
 - Input: wav / aiff / mp3 / flac / m4a / ogg, up to 10 minutes (v1 limit).
 - Separation runs at very roughly realtime speed on Apple Silicon — a 4-minute
   song takes a few minutes. Live keeps playing; the work happens on a

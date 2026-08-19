@@ -28,6 +28,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     auto& audition = splittrProcessor.getAudition();
 
     idleView.onBrowse = [this] { browseForAudioFile(); };
+    idleView.onQualityChange = [&engine] (splittr::Quality q) { engine.setQuality (q); };
 
     downloadView.onCancel = [&engine] { engine.requestCancel(); };
     downloadView.onDownload = [&engine] { engine.startModelDownload(); };
@@ -240,7 +241,11 @@ void SplittrAudioProcessorEditor::timerCallback()
         case Phase::Downloading: meta = "FIRST RUN"; break;
         case Phase::Decoding:
         case Phase::Separating:
-        case Phase::Rendering: meta = "4-SOURCE ANALYSIS"; break;
+        case Phase::Rendering:
+            meta = snap.quality == splittr::Quality::best
+                       ? juce::String::fromUTF8 ("4-SOURCE ANALYSIS \xc2\xb7 FINE-TUNED")
+                       : juce::String ("4-SOURCE ANALYSIS");
+            break;
         case Phase::Ready:
             meta = juce::String::fromUTF8 ("OUTPUT 2 \xc3\x97 WAV \xc2\xb7 32-BIT FLOAT \xc2\xb7 44.1 kHz");
             break;
@@ -262,7 +267,10 @@ void SplittrAudioProcessorEditor::timerCallback()
     doneView.setVisible (showDone);
 
     if (showIdle)
+    {
         idleView.setErrorMessage (snap.phase == Phase::Error ? snap.message : juce::String());
+        idleView.setQuality (snap.quality);
+    }
 
     if (showDownload)
         downloadView.update (animationClock, snap);

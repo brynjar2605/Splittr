@@ -9,19 +9,20 @@ juce::File StemCache::cacheRoot()
     return ModelManager::appDataDir().getChildFile ("cache");
 }
 
-juce::String StemCache::keyFor (const juce::File& source)
+juce::String StemCache::keyFor (const juce::File& source, Quality quality)
 {
     const auto identity = source.getFullPathName()
                           + "|" + juce::String (source.getSize())
-                          + "|" + juce::String (source.getLastModificationTime().toMilliseconds());
+                          + "|" + juce::String (source.getLastModificationTime().toMilliseconds())
+                          + (quality == Quality::best ? "|ft" : "");
 
     return juce::String::toHexString (identity.hashCode64());
 }
 
-CachedStems StemCache::entryFor (const juce::File& source)
+CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
 {
     CachedStems entry;
-    entry.dir = cacheRoot().getChildFile (keyFor (source));
+    entry.dir = cacheRoot().getChildFile (keyFor (source, quality));
     entry.vocals = entry.dir.getChildFile ("Vocals.wav");
     entry.instrumental = entry.dir.getChildFile ("Instrumental.wav");
     entry.meta = entry.dir.getChildFile ("meta.xml");

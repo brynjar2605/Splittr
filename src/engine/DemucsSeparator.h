@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <array>
 #include <functional>
+#include <vector>
 
 namespace splittr
 {
@@ -26,7 +27,12 @@ public:
 
     // onProgress: [0,1] + message. shouldContinue: poll for cancellation
     // (checked from the demucs progress callback, i.e. per segment).
-    static Status separate (const juce::File& modelFile,
+    //
+    // modelFiles: 1 file = plain htdemucs; 4 files = the fine-tuned
+    // htdemucs_ft ensemble in target order (drums, bass, other, vocals) —
+    // each specialist is run over the whole track and contributes only its
+    // own source, per upstream demucs_ft.
+    static Status separate (const std::vector<juce::File>& modelFiles,
                             const juce::AudioBuffer<float>& stereo44k,
                             const std::function<void (float, const juce::String&)>& onProgress,
                             const std::function<bool()>& shouldContinue,

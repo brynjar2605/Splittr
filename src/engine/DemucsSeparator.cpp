@@ -191,7 +191,7 @@ int DemucsSeparator::expectedSegments (int numSamples)
     return 2 * perPass; // two shift passes
 }
 
-DemucsSeparator::Status DemucsSeparator::separate (const juce::File& modelFile,
+DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>& modelFiles,
                                                    const juce::AudioBuffer<float>& stereo44k,
                                                    const std::function<void (float, const juce::String&)>& onProgress,
                                                    const std::function<bool()>& shouldContinue,
@@ -199,26 +199,13 @@ DemucsSeparator::Status DemucsSeparator::separate (const juce::File& modelFile,
                                                    juce::String& error)
 {
     jassert (stereo44k.getNumChannels() == 2);
+    jassert (modelFiles.size() == 1 || modelFiles.size() == 4);
 
     const auto numSamples = stereo44k.getNumSamples();
 
-    if (numSamples <= 0)
+    if (numSamples <= 0 || modelFiles.empty())
     {
         error = "No audio to separate";
-        return Status::failed;
-    }
-
-    demucscpp::demucs_model model {};
-
-    if (! demucscpp::load_demucs_model (modelFile.getFullPathName().toStdString(), &model))
-    {
-        error = "Failed to load model: " + modelFile.getFullPathName();
-        return Status::failed;
-    }
-
-    if (! model.is_4sources)
-    {
-        error = "Expected a 4-source htdemucs model";
         return Status::failed;
     }
 
@@ -242,11 +229,55 @@ DemucsSeparator::Status DemucsSeparator::separate (const juce::File& modelFile,
             onProgress (juce::jlimit (0.0f, 1.0f, progress), juce::String (message));
     };
 
+    const auto numModels = (int) modelFiles.size();
     Eigen::Tensor3dXf targets;
 
     try
     {
-        targets = chunkedInference (model, audio, chooseNumChunks (numSamples), progressCallback);
+        // Load models one at a time so ensemble mode doesn't hold 4 models
+        // (~4 x 160 MB) in memory at once.
+        for (int m = 0; m < numModels; ++m)
+        {
+            demucscpp::demucs_model model {};
+
+            if (! demucscpp::load_demucs_model (modelFiles[(size_t) m].getFullPathName().toStdString(), &model))
+            {
+                error = "Failed to load model: " + modelFiles[(size_t) m].getFullPathName();
+                return Status::failed;
+            }
+
+            if (! model.is_4sources)
+            {
+                error = "Expected a 4-source htdemucs model";
+                return Status::failed;
+            }
+
+            demucscpp::ProgressCallback scopedCallback =
+                numModels == 1
+                    ? progressCallback
+                    : [&, m] (float p, const std::string& message)
+                      { progressCallback (((float) m + p) / (float) numModels, message); };
+
+            auto modelOut = chunkedInference (model, audio, chooseNumChunks (numSamples), scopedCallback);
+
+            if (numModels == 1)
+            {
+                targets = std::move (modelOut);
+            }
+            else
+            {
+                // Fine-tuned specialist m contributes only target m.
+                if (targets.size() == 0)
+                {
+                    targets = Eigen::Tensor3dXf (4, 2, numSamples);
+                    targets.setZero();
+                }
+
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < numSamples; ++i)
+                        targets (m, ch, i) = modelOut (m, ch, i);
+            }
+        }
     }
     catch (const CancelledException&)
     {

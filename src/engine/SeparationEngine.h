@@ -17,6 +17,7 @@ struct EngineSnapshot
     Phase phase = Phase::Idle;
     float progress = 0.0f; // composite 0..1 for the current activity
     juce::String message;  // error reason (short, upper-case-able)
+    Quality quality = Quality::fast;
 
     juce::File sourceFile;
     double sourceDuration = 0.0;       // seconds
@@ -51,6 +52,7 @@ public:
     void requestNewFile();                        // done -> idle
     void startModelDownload();
     void locateModel (const juce::File&);         // manual "LOCATE FILE MANUALLY…"
+    void setQuality (Quality);                    // FAST / BEST toggle
 
     EngineSnapshot getSnapshot() const;
 
@@ -68,14 +70,15 @@ private:
     friend class DownloadJob;
     friend class SeparationJob;
 
-    bool modelReady() const { return models.resolve().existsAsFile(); }
+    bool modelReady (Quality q) const { return models.missingFor (q).empty(); }
+    bool modelReady() const { return modelReady (models.quality()); }
 
     // Publish a change; ignored when `generation` no longer matches (a newer
     // request superseded this job).
     void mutate (int generation, const std::function<void (EngineSnapshot&)>&);
     int currentGeneration() const { return generation.load(); }
 
-    bool tryPublishCached (const juce::File& source, int gen);
+    bool tryPublishCached (const juce::File& source, int gen, Quality quality);
 
     AudioFileIO io;
     ModelManager models;

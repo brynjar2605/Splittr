@@ -35,10 +35,15 @@ void DownloadView::update (double clockSeconds, const EngineSnapshot& s)
         primaryButton.setLabel (downloading ? "CANCEL" : "DOWNLOAD");
     }
 
+    const auto numModels = (int) ModelManager::filenamesFor (s.quality).size();
+    const auto totalBytes = s.downloadTotal > 0
+                                ? s.downloadTotal
+                                : (juce::int64) numModels * ModelManager::bytesPerModel;
+
     if (downloading)
     {
         const auto pct = (int) std::round (s.progress * 100.0f);
-        const auto mb = juce::String (ModelManager::expectedBytes / 1000000) + " MB";
+        const auto mb = juce::String (totalBytes / 1000000) + " MB";
         const auto speed = s.downloadMBps > 0.05 ? juce::String (s.downloadMBps, 1) + " MB/s"
                                                  : juce::String ("--");
         captionLeft = juce::String (pct) + juce::String::fromUTF8 ("% \xc2\xb7 ") + mb
@@ -48,6 +53,10 @@ void DownloadView::update (double clockSeconds, const EngineSnapshot& s)
     {
         captionLeft = message.isNotEmpty() ? message : juce::String ("waiting to download");
     }
+
+    copyLine = s.quality == Quality::best
+                   ? juce::String::fromUTF8 ("htdemucs fine-tuned \xe2\x80\x94 4 models \xc3\x97 84 MB \xe2\x80\x94 one time only.")
+                   : juce::String::fromUTF8 ("ggml-htdemucs-4s-f16.bin \xe2\x80\x94 84 MB \xe2\x80\x94 one time only.");
 
     if (message != s.message)
     {
@@ -87,8 +96,8 @@ void DownloadView::paint (juce::Graphics& g)
                 area.getX(), area.getY(), area.getWidth(), 21, juce::Justification::centredLeft);
 
     g.setColour (theme::text50);
-    g.drawText (juce::String::fromUTF8 ("ggml-htdemucs-4s-f16.bin \xe2\x80\x94 84 MB \xe2\x80\x94 one time only."),
-                area.getX(), area.getY() + 21, area.getWidth(), 21, juce::Justification::centredLeft);
+    g.drawText (copyLine, area.getX(), area.getY() + 21, area.getWidth(), 21,
+                juce::Justification::centredLeft);
 
     // --- matrix bar box ---
     auto barBox = juce::Rectangle<int> (area.getX(), area.getY() + 42 + 18,

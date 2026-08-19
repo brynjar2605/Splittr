@@ -55,7 +55,7 @@ int main (int argc, char** argv)
     const auto inferenceStart = juce::Time::getMillisecondCounterHiRes();
 
     const auto status = splittr::DemucsSeparator::separate (
-        modelFile,
+        { modelFile },
         decoded.buffer,
         [] (float progress, const juce::String& message)
         {

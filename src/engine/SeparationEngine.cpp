@@ -32,70 +32,85 @@ namespace
 class SeparationEngine::DownloadJob : public juce::ThreadPoolJob
 {
 public:
-    DownloadJob (SeparationEngine& e, int gen)
-        : ThreadPoolJob ("model download"), engine (e), generation (gen) {}
+    DownloadJob (SeparationEngine& e, int gen, Quality q)
+        : ThreadPoolJob ("model download"), engine (e), generation (gen), quality (q) {}
 
+    // Fetch every missing weight file for `quality` (1 for fast, up to 4 for
+    // best), with progress aggregated across files by bytes.
     static DownloadOutcome download (juce::ThreadPoolJob& job, SeparationEngine& engine,
-                                     int gen, juce::String& error)
+                                     int gen, Quality quality, juce::String& error)
     {
-        const auto target = ModelManager::defaultModelFile();
-        target.getParentDirectory().createDirectory();
+        ModelManager::modelsDir().createDirectory();
 
-        auto part = target.getSiblingFile (target.getFileName() + ".part");
-        part.deleteFile();
+        const auto missing = engine.models.missingFor (quality);
 
-        auto task = juce::URL (ModelManager::downloadUrl)
-                        .downloadToFile (part, juce::URL::DownloadTaskOptions());
+        if (missing.empty())
+            return DownloadOutcome::ok;
 
-        if (task == nullptr)
-        {
-            error = "COULD NOT START DOWNLOAD";
-            return DownloadOutcome::failed;
-        }
+        const auto totalBytes = (juce::int64) missing.size() * ModelManager::bytesPerModel;
+        juce::int64 doneBytes = 0;
 
         const auto startMs = juce::Time::getMillisecondCounterHiRes();
 
-        while (! task->isFinished())
+        for (const auto& missingFile : missing)
         {
-            if (job.shouldExit())
+            // Always download into the managed models dir (the user-located
+            // dir stays read-only for us).
+            const auto target = ModelManager::modelsDir().getChildFile (missingFile.getFileName());
+            auto part = target.getSiblingFile (target.getFileName() + ".part");
+            part.deleteFile();
+
+            auto task = juce::URL (ModelManager::urlFor (target.getFileName()))
+                            .downloadToFile (part, juce::URL::DownloadTaskOptions());
+
+            if (task == nullptr)
             {
-                task.reset();
-                part.deleteFile();
-                return DownloadOutcome::cancelled;
+                error = "COULD NOT START DOWNLOAD";
+                return DownloadOutcome::failed;
             }
 
-            juce::Thread::sleep (100);
-
-            const auto done = task->getLengthDownloaded();
-            const auto total = task->getTotalLength() > 0 ? task->getTotalLength()
-                                                          : ModelManager::expectedBytes;
-            const auto elapsed = (juce::Time::getMillisecondCounterHiRes() - startMs) / 1000.0;
-
-            engine.mutate (gen, [done, total, elapsed] (EngineSnapshot& s)
+            while (! task->isFinished())
             {
-                s.phase = Phase::Downloading;
-                s.downloadDone = done;
-                s.downloadTotal = total;
-                s.downloadMBps = elapsed > 0.5 ? (double) done / (1024.0 * 1024.0) / elapsed : 0.0;
-                s.progress = total > 0 ? (float) ((double) done / (double) total) : 0.0f;
-            });
-        }
+                if (job.shouldExit())
+                {
+                    task.reset();
+                    part.deleteFile(); // completed files stay: resume-friendly
+                    return DownloadOutcome::cancelled;
+                }
 
-        if (task->hadError() || part.getSize() != ModelManager::expectedBytes)
-        {
-            part.deleteFile();
-            error = task->hadError() ? "DOWNLOAD FAILED — CHECK CONNECTION"
-                                     : "DOWNLOAD INCOMPLETE — RETRY";
-            return DownloadOutcome::failed;
-        }
+                juce::Thread::sleep (100);
 
-        target.deleteFile();
+                const auto done = doneBytes + task->getLengthDownloaded();
+                const auto elapsed = (juce::Time::getMillisecondCounterHiRes() - startMs) / 1000.0;
 
-        if (! part.moveFileTo (target))
-        {
-            part.deleteFile();
-            error = "COULD NOT MOVE MODEL INTO PLACE";
-            return DownloadOutcome::failed;
+                engine.mutate (gen, [done, totalBytes, elapsed] (EngineSnapshot& s)
+                {
+                    s.phase = Phase::Downloading;
+                    s.downloadDone = done;
+                    s.downloadTotal = totalBytes;
+                    s.downloadMBps = elapsed > 0.5 ? (double) done / (1024.0 * 1024.0) / elapsed : 0.0;
+                    s.progress = (float) ((double) done / (double) totalBytes);
+                });
+            }
+
+            if (task->hadError() || part.getSize() != ModelManager::bytesPerModel)
+            {
+                part.deleteFile();
+                error = task->hadError() ? "DOWNLOAD FAILED — CHECK CONNECTION"
+                                         : "DOWNLOAD INCOMPLETE — RETRY";
+                return DownloadOutcome::failed;
+            }
+
+            target.deleteFile();
+
+            if (! part.moveFileTo (target))
+            {
+                part.deleteFile();
+                error = "COULD NOT MOVE MODEL INTO PLACE";
+                return DownloadOutcome::failed;
+            }
+
+            doneBytes += ModelManager::bytesPerModel;
         }
 
         return DownloadOutcome::ok;
@@ -105,7 +120,7 @@ public:
     {
         juce::String error;
 
-        switch (download (*this, engine, generation, error))
+        switch (download (*this, engine, generation, quality, error))
         {
             case DownloadOutcome::ok:
                 engine.mutate (generation, [] (EngineSnapshot& s)
@@ -141,13 +156,15 @@ public:
 private:
     SeparationEngine& engine;
     const int generation;
+    const Quality quality;
 };
 
 class SeparationEngine::SeparationJob : public juce::ThreadPoolJob
 {
 public:
-    SeparationJob (SeparationEngine& e, juce::File f, int gen)
-        : ThreadPoolJob ("separation"), engine (e), source (std::move (f)), generation (gen) {}
+    SeparationJob (SeparationEngine& e, juce::File f, int gen, Quality q)
+        : ThreadPoolJob ("separation"), engine (e), source (std::move (f)),
+          generation (gen), quality (q) {}
 
     JobStatus runJob() override
     {
@@ -163,11 +180,11 @@ public:
         };
 
         // --- ensure model -------------------------------------------------
-        if (! engine.modelReady())
+        if (! engine.modelReady (quality))
         {
             juce::String error;
 
-            switch (DownloadJob::download (*this, engine, generation, error))
+            switch (DownloadJob::download (*this, engine, generation, quality, error))
             {
                 case DownloadOutcome::ok: break;
                 case DownloadOutcome::cancelled: return jobHasFinished; // requestCancel published state
@@ -202,7 +219,8 @@ public:
 
         auto sourceWave = AudioFileIO::peakColumns (decoded.buffer, 60);
         const auto duration = decoded.durationSeconds;
-        const auto segmentCount = DemucsSeparator::expectedSegments (decoded.buffer.getNumSamples());
+        const auto numModels = quality == Quality::best ? 4 : 1;
+        const auto segmentCount = numModels * DemucsSeparator::expectedSegments (decoded.buffer.getNumSamples());
 
         engine.mutate (generation, [&] (EngineSnapshot& s)
         {
@@ -220,7 +238,7 @@ public:
         SeparationResult result;
 
         const auto status = DemucsSeparator::separate (
-            engine.models.resolve(),
+            engine.models.filesFor (quality),
             decoded.buffer,
             [&] (float p, const juce::String& message)
             {
@@ -228,7 +246,7 @@ public:
                     ++segmentsDone;
 
                 const auto elapsed = (juce::Time::getMillisecondCounterHiRes() - inferenceStart) / 1000.0;
-                const auto eta = p > 0.05f ? elapsed * (1.0 - p) / p : -1.0;
+                const auto eta = p > 0.02f ? elapsed * (1.0 - p) / p : -1.0;
 
                 engine.mutate (generation, [&] (EngineSnapshot& s)
                 {
@@ -256,7 +274,7 @@ public:
             s.progress = 0.95f;
         });
 
-        auto entry = StemCache::entryFor (source);
+        auto entry = StemCache::entryFor (source, quality);
         entry.dir.createDirectory();
 
         if (! engine.io.writeWavFloat32 (entry.vocals, result.vocals, AudioFileIO::kTargetSampleRate, error)
@@ -273,6 +291,7 @@ public:
         juce::XmlElement meta ("SplittrStems");
         meta.setAttribute ("version", 1);
         meta.setAttribute ("sourcePath", source.getFullPathName());
+        meta.setAttribute ("quality", quality == Quality::best ? "best" : "fast");
         meta.setAttribute ("duration", duration);
         meta.setAttribute ("inferenceSeconds", inferenceSeconds);
         meta.setAttribute ("realtimeFactor", rtFactor);
@@ -309,6 +328,7 @@ private:
     SeparationEngine& engine;
     const juce::File source;
     const int generation;
+    const Quality quality;
 };
 
 //==============================================================================
@@ -319,6 +339,7 @@ SeparationEngine::SeparationEngine()
                 .withThreadName ("Splittr Separation")
                 .withDesiredThreadPriority (juce::Thread::Priority::low))
 {
+    snapshot.quality = models.quality();
     snapshot.phase = modelReady() ? Phase::Idle : Phase::NeedsModel;
 }
 
@@ -351,7 +372,9 @@ void SeparationEngine::editorOpened()
 
 void SeparationEngine::startModelDownload()
 {
-    if (modelReady())
+    const auto quality = models.quality();
+
+    if (modelReady (quality))
         return;
 
     const auto gen = generation.fetch_add (1) + 1;
@@ -364,16 +387,53 @@ void SeparationEngine::startModelDownload()
         snapshot.message.clear();
         snapshot.progress = 0.0f;
         snapshot.downloadDone = 0;
-        snapshot.downloadTotal = ModelManager::expectedBytes;
+        snapshot.downloadTotal = (juce::int64) models.missingFor (quality).size()
+                                 * ModelManager::bytesPerModel;
         snapshot.downloadMBps = 0.0;
     }
 
-    pool.addJob (new DownloadJob (*this, gen), true);
+    pool.addJob (new DownloadJob (*this, gen, quality), true);
 }
 
-bool SeparationEngine::tryPublishCached (const juce::File& source, int gen)
+void SeparationEngine::setQuality (Quality q)
 {
-    const auto entry = StemCache::entryFor (source);
+    if (models.quality() == q)
+        return;
+
+    models.setQuality (q);
+
+    bool interruptible = false;
+
+    {
+        const juce::ScopedLock sl (lock);
+        snapshot.quality = q;
+        interruptible = snapshot.phase == Phase::Idle || snapshot.phase == Phase::NeedsModel
+                        || snapshot.phase == Phase::Downloading || snapshot.phase == Phase::Error;
+    }
+
+    // Mid-job or on the done view the switch only affects the next run.
+    if (! interruptible)
+        return;
+
+    generation.fetch_add (1);
+    pool.removeAllJobs (true, 0);
+
+    if (modelReady (q))
+    {
+        const juce::ScopedLock sl (lock);
+        snapshot.phase = Phase::Idle;
+        snapshot.message.clear();
+        snapshot.progress = 0.0f;
+    }
+    else
+    {
+        startModelDownload();
+    }
+}
+
+bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Quality quality)
+{
+    const auto entry = StemCache::entryFor (source, quality);
 
     if (! entry.complete())
         return false;
@@ -412,10 +472,11 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen)
 void SeparationEngine::requestSeparation (const juce::File& file)
 {
     const auto gen = generation.fetch_add (1) + 1;
+    const auto quality = models.quality();
 
     pool.removeAllJobs (true, 0);
 
-    if (tryPublishCached (file, gen))
+    if (tryPublishCached (file, gen, quality))
         return;
 
     {
@@ -427,7 +488,7 @@ void SeparationEngine::requestSeparation (const juce::File& file)
         snapshot.peaksKnown = false;
     }
 
-    pool.addJob (new SeparationJob (*this, file, gen), true);
+    pool.addJob (new SeparationJob (*this, file, gen, quality), true);
 }
 
 void SeparationEngine::requestCancel()
@@ -455,6 +516,7 @@ void SeparationEngine::requestNewFile()
 
     const juce::ScopedLock sl (lock);
     snapshot = EngineSnapshot {};
+    snapshot.quality = models.quality();
     snapshot.phase = modelReady() ? Phase::Idle : Phase::NeedsModel;
 }
 
@@ -463,7 +525,10 @@ void SeparationEngine::locateModel (const juce::File& file)
     if (! file.existsAsFile())
         return;
 
-    models.setUserOverride (file);
+    models.setUserModelDir (file.getParentDirectory());
+
+    if (! modelReady())
+        return; // still incomplete (e.g. best mode needs all 4 files present)
 
     generation.fetch_add (1);
     pool.removeAllJobs (true, 0);
@@ -496,7 +561,7 @@ void SeparationEngine::restoreFromState (const juce::String& sourcePath)
 
     const auto gen = generation.fetch_add (1) + 1;
 
-    if (! tryPublishCached (source, gen))
+    if (! tryPublishCached (source, gen, models.quality()))
     {
         const juce::ScopedLock sl (lock);
         snapshot.sourceFile = source;
