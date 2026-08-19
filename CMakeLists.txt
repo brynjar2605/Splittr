@@ -28,11 +28,13 @@ juce_add_plugin(Splittr
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/splittr-icon.png"
     COPY_PLUGIN_AFTER_BUILD TRUE)
 
 target_sources(Splittr PRIVATE
     src/PluginProcessor.cpp
     src/PluginEditor.cpp
+    src/ui/Theme.cpp
     src/ui/HeaderBar.cpp
     src/ui/MatrixBar.cpp
     src/ui/IdleDropView.cpp
@@ -45,7 +47,8 @@ target_sources(Splittr PRIVATE
     src/engine/SeparationEngine.cpp
     src/engine/ModelManager.cpp
     src/engine/StemCache.cpp
-    src/engine/AuditionPlayer.cpp)
+    src/engine/AuditionPlayer.cpp
+    src/engine/TrackAnalyzer.cpp)
 
 target_include_directories(Splittr PRIVATE src)
 
@@ -60,10 +63,34 @@ target_link_libraries(Splittr PRIVATE
     demucs_cpp
     juce::juce_audio_utils
     juce::juce_audio_formats
+    juce::juce_dsp
     juce::juce_gui_extra
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags
     juce::juce_recommended_warning_flags)
+
+# --- Finder icon for the plugin bundles ---
+# JUCE's ICON_BIG only applies to the Standalone app; stamp the same icns
+# into the AU/VST3 bundles (build artefact + installed copy) and re-sign.
+set(SPLITTR_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/splittr.icns")
+
+foreach(pair "AU;Components/Splittr.component" "VST3;VST3/Splittr.vst3")
+    list(GET pair 0 fmt)
+    list(GET pair 1 installed)
+    set(installedBundle "$ENV{HOME}/Library/Audio/Plug-Ins/${installed}")
+
+    add_custom_command(TARGET Splittr_${fmt} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy "${SPLITTR_ICNS}"
+                "$<TARGET_BUNDLE_DIR:Splittr_${fmt}>/Contents/Resources/splittr.icns"
+        COMMAND plutil -replace CFBundleIconFile -string splittr
+                "$<TARGET_BUNDLE_DIR:Splittr_${fmt}>/Contents/Info.plist"
+        COMMAND ${CMAKE_COMMAND} -E copy "${SPLITTR_ICNS}"
+                "${installedBundle}/Contents/Resources/splittr.icns"
+        COMMAND plutil -replace CFBundleIconFile -string splittr
+                "${installedBundle}/Contents/Info.plist"
+        COMMAND codesign --force -s - "${installedBundle}"
+        VERBATIM)
+endforeach()
 
 # --- CLI test harness (M1): proves the separation engine before plugin work ---
 juce_add_console_app(splittr_cli PRODUCT_NAME "splittr_cli")

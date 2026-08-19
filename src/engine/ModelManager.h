@@ -46,6 +46,14 @@ public:
     void setUserModelDir (const juce::File& dir);
     juce::File userModelDir() const;
 
+    // Last EXPORT… destination.
+    void setLastExportDir (const juce::File& dir);
+    juce::File lastExportDir() const;
+
+    // Generic Settings.xml access for UI preferences (theme, accent, …).
+    static juce::String getUiSetting (const juce::String& attribute, const juce::String& fallback);
+    static void setUiSetting (const juce::String& attribute, const juce::String& value);
+
 private:
     static juce::File settingsFile();
     static std::unique_ptr<juce::XmlElement> readSettings();

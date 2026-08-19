@@ -6,24 +6,28 @@ namespace splittr
 
 namespace
 {
-    constexpr int gripWidth = 34;
-    constexpr int padX = 11, padY = 9;
-    constexpr int titleRowHeight = 20;
-    constexpr int titleGap = 7;
-    constexpr int waveHeight = 36;
-    constexpr int scrubberWidth = 74;
+    constexpr int gripWidth = 26;
+    constexpr int padX = 10, padY = 6;
+    constexpr int titleRowHeight = 16;
+    constexpr int titleGap = 4;
+    constexpr int scrubberWidth = 60;
+    constexpr int playSize = 16;
+    constexpr int elapsedWidth = 26;
 } // namespace
 
-StemRowComponent::StemRowComponent (Kind k) : kind (k)
+StemRowComponent::StemRowComponent (juce::String displayName, bool accented)
+    : name (std::move (displayName)), accent (accented)
 {
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
 }
 
 void StemRowComponent::update (const juce::File& file, const std::vector<float>& waveform,
-                               bool isPlaying, double positionSeconds, double lengthSeconds)
+                               float peak, bool isPlaying, double positionSeconds,
+                               double lengthSeconds)
 {
     wavFile = file;
     wave = waveform;
+    peakDb = peak;
     playing = isPlaying;
     position = positionSeconds;
     length = lengthSeconds;
@@ -33,35 +37,32 @@ void StemRowComponent::update (const juce::File& file, const std::vector<float>&
 juce::Rectangle<int> StemRowComponent::playButtonBounds() const
 {
     const auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, padY);
-    // right cluster: [play 20] 8 [track 74] 8 [elapsed ~24]
-    const auto x = body.getRight() - 24 - 8 - scrubberWidth - 8 - 20;
-    return { x, body.getY(), 20, 20 };
+    const auto x = body.getRight() - elapsedWidth - 8 - scrubberWidth - 8 - playSize;
+    return { x, body.getY(), playSize, playSize };
 }
 
 juce::Rectangle<int> StemRowComponent::scrubberBounds() const
 {
     const auto play = playButtonBounds();
-    // generous hit area around the 3px track
-    return { play.getRight() + 8, play.getY(), scrubberWidth, 20 };
+    return { play.getRight() + 8, play.getY(), scrubberWidth, playSize };
 }
 
 void StemRowComponent::paint (juce::Graphics& g)
 {
-    const bool isVocals = (kind == Kind::vocals);
     auto bounds = getLocalBounds();
 
-    if (isVocals)
+    if (accent)
     {
         g.setColour (theme::accentTint6);
         g.fillRect (bounds);
     }
 
-    auto borderColour = isVocals ? theme::accentTint35 : theme::lineStrong;
+    auto borderColour = accent ? theme::accentTint35 : theme::lineStrong;
     g.setColour (hovered ? borderColour.withAlpha (juce::jmin (1.0f, borderColour.getFloatAlpha() + 0.1f))
                          : borderColour);
     g.drawRect (bounds, 1);
 
-    // --- grip column: 9x17px dot grid on 4px pitch ---
+    // --- grip column ---
     auto grip = bounds.removeFromLeft (gripWidth);
     g.setColour (theme::lineSoft15);
     g.fillRect (grip.getRight() - 1, grip.getY() + 1, 1, grip.getHeight() - 2);
@@ -78,47 +79,47 @@ void StemRowComponent::paint (juce::Graphics& g)
 
     auto body = bounds.reduced (padX, padY);
 
-    // --- title row ---
+    // --- title row: name + peak, transport on the right ---
     auto titleRow = body.removeFromTop (titleRowHeight);
 
-    const auto nameFont = theme::mono (12.0f, 0.1f);
-    const auto name = isVocals ? "VOCALS" : "INSTRUMENTAL";
+    const auto nameFont = theme::mono (10.5f, 0.1f);
 
-    g.setColour (isVocals ? theme::accentPale : theme::text);
+    g.setColour (accent ? theme::accentPale : theme::text);
     g.setFont (nameFont);
     g.drawText (name, titleRow, juce::Justification::centredLeft);
 
-    g.setColour (theme::text45);
-    g.setFont (theme::mono (8.5f));
-    g.drawText (isVocals ? juce::String::fromUTF8 ("source 1 of 4 \xc2\xb7 isolated")
-                         : "drums + bass + other, summed",
-                titleRow.withTrimmedLeft ((int) ui::textWidth (nameFont, name) + 12),
-                juce::Justification::centredLeft);
+    if (peakDb > -119.0f)
+    {
+        g.setColour (theme::text45);
+        g.setFont (theme::mono (8.0f));
+        g.drawText (juce::String (peakDb, 1) + " dB",
+                    titleRow.withTrimmedLeft ((int) ui::textWidth (nameFont, name) + 10),
+                    juce::Justification::centredLeft);
+    }
 
     // --- transport cluster ---
     {
         const auto play = playButtonBounds().toFloat();
-        const auto accentCol = isVocals ? theme::accentMid : theme::text50;
+        const auto accentCol = accent ? theme::accentMid : theme::text50;
 
         g.setColour (accentCol);
         g.drawEllipse (play.reduced (0.5f), 1.0f);
 
-        g.setColour (isVocals ? theme::accentSoft : theme::text);
-        g.setFont (theme::mono (7.5f));
+        g.setColour (accent ? theme::accentSoft : theme::text);
 
         if (playing)
         {
             const auto c = play.getCentre();
-            g.fillRect (c.x - 3.0f, c.y - 3.5f, 2.0f, 7.0f);
-            g.fillRect (c.x + 1.0f, c.y - 3.5f, 2.0f, 7.0f);
+            g.fillRect (c.x - 2.5f, c.y - 3.0f, 1.5f, 6.0f);
+            g.fillRect (c.x + 1.0f, c.y - 3.0f, 1.5f, 6.0f);
         }
         else
         {
+            g.setFont (theme::mono (6.5f));
             g.drawText (juce::String::fromUTF8 ("\xe2\x96\xb6"),
                         play.translated (1.0f, 0.0f), juce::Justification::centred);
         }
 
-        // track
         const auto scrub = scrubberBounds().toFloat();
         const auto track = juce::Rectangle<float> (scrub.getX(), scrub.getCentreY() - 1.5f,
                                                    (float) scrubberWidth, 3.0f);
@@ -127,10 +128,10 @@ void StemRowComponent::paint (juce::Graphics& g)
 
         const auto frac = length > 0.0 ? juce::jlimit (0.0, 1.0, position / length) : 0.0;
 
-        g.setColour (isVocals ? theme::accentMid : theme::rgba (221, 214, 230, 0.7f));
+        g.setColour (accent ? theme::accentMid : theme::rgba (221, 214, 230, 0.7f));
         g.fillRect (track.withWidth ((float) frac * track.getWidth()));
 
-        if (isVocals && playing)
+        if (accent && playing)
         {
             g.setColour (theme::accentPale);
             g.fillRect (track.getX() + (float) frac * track.getWidth() - 1.0f,
@@ -140,7 +141,8 @@ void StemRowComponent::paint (juce::Graphics& g)
         g.setColour (theme::text45);
         g.setFont (theme::mono (8.0f));
         g.drawText (ui::mmss (playing ? position : length),
-                    juce::Rectangle<float> (scrub.getRight() + 8.0f, scrub.getY(), 26.0f, scrub.getHeight()),
+                    juce::Rectangle<float> (scrub.getRight() + 8.0f, scrub.getY(),
+                                            (float) elapsedWidth, scrub.getHeight()),
                     juce::Justification::centredLeft);
     }
 
@@ -148,14 +150,14 @@ void StemRowComponent::paint (juce::Graphics& g)
 
     // --- waveform: 70 columns, 1.5px gap, centred ---
     {
-        auto waveArea = body.removeFromTop (waveHeight).toFloat();
+        auto waveArea = body.toFloat();
         const int cols = (int) wave.size();
 
-        if (cols > 0)
+        if (cols > 0 && waveArea.getHeight() > 2.0f)
         {
             const auto colW = (waveArea.getWidth() - 1.5f * (float) (cols - 1)) / (float) cols;
 
-            g.setColour (isVocals ? theme::accentMid : theme::text60);
+            g.setColour (accent ? theme::accentMid : theme::text60);
 
             for (int i = 0; i < cols; ++i)
             {

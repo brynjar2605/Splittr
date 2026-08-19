@@ -1,6 +1,7 @@
 #include "SeparationEngine.h"
 #include "DemucsSeparator.h"
 #include "StemCache.h"
+#include "TrackAnalyzer.h"
 
 namespace splittr
 {
@@ -222,6 +223,8 @@ public:
         const auto numModels = quality == Quality::best ? 4 : 1;
         const auto segmentCount = numModels * DemucsSeparator::expectedSegments (decoded.buffer.getNumSamples());
 
+        const auto analysis = TrackAnalyzer::analyze (decoded.buffer);
+
         engine.mutate (generation, [&] (EngineSnapshot& s)
         {
             s.phase = Phase::Separating;
@@ -229,6 +232,8 @@ public:
             s.sourceDuration = duration;
             s.sourceWaveform = sourceWave;
             s.segmentCount = segmentCount;
+            s.bpm = analysis.bpm;
+            s.key = analysis.key;
         });
 
         // --- separate -----------------------------------------------------
@@ -277,31 +282,49 @@ public:
         auto entry = StemCache::entryFor (source, quality);
         entry.dir.createDirectory();
 
-        if (! engine.io.writeWavFloat32 (entry.vocals, result.vocals, AudioFileIO::kTargetSampleRate, error)
-            || ! engine.io.writeWavFloat32 (entry.instrumental, result.instrumental, AudioFileIO::kTargetSampleRate, error))
+        const juce::AudioBuffer<float>* buffers[numStems] = {
+            &result.vocals, &result.drums, &result.bass, &result.other, &result.instrumental
+        };
+
+        // StemIndex order; peaks come from the source order drums,bass,other,vocals.
+        const float stemPeaksDb[numStems] = {
+            result.sourcePeaksDb[3], result.sourcePeaksDb[0], result.sourcePeaksDb[1],
+            result.sourcePeaksDb[2], result.instrumentalPeakDb
+        };
+
+        std::array<std::vector<float>, numStems> waves;
+
+        for (int i = 0; i < numStems; ++i)
         {
-            entry.dir.deleteRecursively();
-            return fail ("COULD NOT WRITE STEMS");
+            if (! engine.io.writeWavFloat32 (entry.stems[(size_t) i], *buffers[i],
+                                             AudioFileIO::kTargetSampleRate, error))
+            {
+                entry.dir.deleteRecursively();
+                return fail ("COULD NOT WRITE STEMS");
+            }
+
+            waves[(size_t) i] = AudioFileIO::peakColumns (*buffers[i], 70);
         }
 
-        auto vocalsWave = AudioFileIO::peakColumns (result.vocals, 70);
-        auto instrumentalWave = AudioFileIO::peakColumns (result.instrumental, 70);
         const auto rtFactor = inferenceSeconds > 0 ? duration / inferenceSeconds : 0.0;
 
         juce::XmlElement meta ("SplittrStems");
-        meta.setAttribute ("version", 1);
+        meta.setAttribute ("version", 2);
         meta.setAttribute ("sourcePath", source.getFullPathName());
         meta.setAttribute ("quality", quality == Quality::best ? "best" : "fast");
         meta.setAttribute ("duration", duration);
         meta.setAttribute ("inferenceSeconds", inferenceSeconds);
         meta.setAttribute ("realtimeFactor", rtFactor);
-        meta.setAttribute ("peaksDb", juce::String (result.sourcePeaksDb[0], 2) + ","
-                                          + juce::String (result.sourcePeaksDb[1], 2) + ","
-                                          + juce::String (result.sourcePeaksDb[2], 2) + ","
-                                          + juce::String (result.sourcePeaksDb[3], 2));
+        meta.setAttribute ("bpm", analysis.bpm);
+        meta.setAttribute ("key", analysis.key);
         meta.setAttribute ("sourceWave", metaCsv (sourceWave));
-        meta.setAttribute ("vocalsWave", metaCsv (vocalsWave));
-        meta.setAttribute ("instrumentalWave", metaCsv (instrumentalWave));
+
+        for (int i = 0; i < numStems; ++i)
+        {
+            meta.setAttribute ("wave" + juce::String (stemName (i)), metaCsv (waves[(size_t) i]));
+            meta.setAttribute ("peak" + juce::String (stemName (i)), (double) stemPeaksDb[i]);
+        }
+
         meta.writeTo (entry.meta);
 
         StemCache::prune();
@@ -310,10 +333,14 @@ public:
         {
             s.phase = Phase::Ready;
             s.progress = 1.0f;
-            s.vocalsWav = entry.vocals;
-            s.instrumentalWav = entry.instrumental;
-            s.vocalsWaveform = vocalsWave;
-            s.instrumentalWaveform = instrumentalWave;
+
+            for (int i = 0; i < numStems; ++i)
+            {
+                s.stems[(size_t) i].wav = entry.stems[(size_t) i];
+                s.stems[(size_t) i].waveform = waves[(size_t) i];
+                s.stems[(size_t) i].peakDb = stemPeaksDb[i];
+            }
+
             s.sourcePeaksDb = result.sourcePeaksDb;
             s.peaksKnown = true;
             s.inferenceSeconds = inferenceSeconds;
@@ -440,12 +467,7 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
 
     auto xml = juce::parseXML (entry.meta);
 
-    if (xml == nullptr || xml->getIntAttribute ("version") != 1)
-        return false;
-
-    auto peaks = metaUncsv (xml->getStringAttribute ("peaksDb"));
-
-    if (peaks.size() != 4)
+    if (xml == nullptr || xml->getIntAttribute ("version") != 2)
         return false;
 
     mutate (gen, [&] (EngineSnapshot& s)
@@ -456,14 +478,22 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
         s.sourceFile = source;
         s.sourceDuration = xml->getDoubleAttribute ("duration");
         s.sourceWaveform = metaUncsv (xml->getStringAttribute ("sourceWave"));
-        s.vocalsWav = entry.vocals;
-        s.instrumentalWav = entry.instrumental;
-        s.vocalsWaveform = metaUncsv (xml->getStringAttribute ("vocalsWave"));
-        s.instrumentalWaveform = metaUncsv (xml->getStringAttribute ("instrumentalWave"));
-        s.sourcePeaksDb = { peaks[0], peaks[1], peaks[2], peaks[3] };
+
+        for (int i = 0; i < numStems; ++i)
+        {
+            s.stems[(size_t) i].wav = entry.stems[(size_t) i];
+            s.stems[(size_t) i].waveform = metaUncsv (xml->getStringAttribute ("wave" + juce::String (stemName (i))));
+            s.stems[(size_t) i].peakDb = (float) xml->getDoubleAttribute ("peak" + juce::String (stemName (i)), -120.0);
+        }
+
+        // source order drums,bass,other,vocals for the working table
+        s.sourcePeaksDb = { s.stems[stemDrums].peakDb, s.stems[stemBass].peakDb,
+                            s.stems[stemOther].peakDb, s.stems[stemVocals].peakDb };
         s.peaksKnown = true;
         s.inferenceSeconds = xml->getDoubleAttribute ("inferenceSeconds");
         s.realtimeFactor = xml->getDoubleAttribute ("realtimeFactor");
+        s.bpm = xml->getDoubleAttribute ("bpm");
+        s.key = xml->getStringAttribute ("key");
     });
 
     return true;

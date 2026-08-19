@@ -36,9 +36,81 @@ void IdleDropView::setQuality (Quality q)
     }
 }
 
+std::pair<juce::Rectangle<int>, juce::Rectangle<int>>
+IdleDropView::drawSwitch (juce::Graphics& g, int x, int y, const juce::String& a,
+                          const juce::String& b, bool bActive, int hoverIdA, int hoverIdB,
+                          int cellWidth) const
+{
+    constexpr int cellH = 22;
+
+    const juce::Rectangle<int> aBounds (x, y, cellWidth, cellH);
+    const juce::Rectangle<int> bBounds (x + cellWidth, y, cellWidth, cellH);
+
+    g.setColour (theme::accentTint15);
+    g.fillRect (bActive ? bBounds : aBounds);
+
+    g.setColour (theme::lineStrong);
+    g.drawRect (juce::Rectangle<int> (x, y, cellWidth * 2, cellH), 1);
+    g.fillRect (x + cellWidth, y + 1, 1, cellH - 2); // divider
+
+    g.setFont (theme::mono (9.5f, 0.1f));
+    g.setColour (! bActive ? theme::accentSoft
+                           : (hoveredOption == hoverIdA ? theme::text60 : theme::text40));
+    g.drawText (a, aBounds, juce::Justification::centred);
+
+    g.setColour (bActive ? theme::accentSoft
+                         : (hoveredOption == hoverIdB ? theme::text60 : theme::text40));
+    g.drawText (b, bBounds, juce::Justification::centred);
+
+    return { aBounds, bBounds };
+}
+
 void IdleDropView::paint (juce::Graphics& g)
 {
-    auto panel = getLocalBounds().reduced (16, 14).toFloat();
+    const auto labelFont = theme::mono (8.5f, 0.12f);
+
+    const auto drawLabel = [&] (const juce::String& label, int x, int y)
+    {
+        g.setFont (labelFont);
+        g.setColour (theme::text35);
+        g.drawText (label, x, y, (int) ui::textWidth (labelFont, label) + 2, 22,
+                    juce::Justification::centredLeft);
+        return x + (int) ui::textWidth (labelFont, label) + 12;
+    };
+
+    // --- ENGINE toggle row above the drop panel ---
+    {
+        const auto x = drawLabel ("ENGINE", 16, 14);
+        std::tie (fastBounds, bestBounds) =
+            drawSwitch (g, x, 14, "FAST", "BEST", quality == Quality::best, 1, 2, 54);
+
+        g.setFont (theme::mono (8.0f, 0.08f));
+        g.setColour (theme::text35);
+        g.drawText (quality == Quality::fast
+                        ? juce::String::fromUTF8 ("htdemucs \xc2\xb7 about realtime")
+                        : juce::String::fromUTF8 ("fine-tuned \xc3\x97 4 \xc2\xb7 best quality \xc2\xb7 ~4\xc3\x97 slower"),
+                    juce::Rectangle<int> (0, 14, getWidth() - 16, 22),
+                    juce::Justification::centredRight);
+    }
+
+    // --- THEME / ACCENT row below the drop panel ---
+    {
+        const auto y = getHeight() - 14 - 22;
+
+        const auto x1 = drawLabel ("THEME", 16, y);
+        std::tie (darkBounds, lightBounds) =
+            drawSwitch (g, x1, y, "DARK", "LIGHT", theme::currentMode() == theme::Mode::light,
+                        3, 4, 54);
+
+        const auto accentLabelX = getWidth() - 16 - 2 * 62
+                                  - ((int) ui::textWidth (labelFont, "ACCENT") + 12);
+        const auto x2 = drawLabel ("ACCENT", accentLabelX, y);
+        std::tie (purpleBounds, pinkBounds) =
+            drawSwitch (g, x2, y, "PURPLE", "PINK",
+                        theme::currentAccent() == theme::Accent::pink, 5, 6, 62);
+    }
+
+    auto panel = getLocalBounds().withTrimmedTop (30).withTrimmedBottom (30).reduced (16, 14).toFloat();
 
     g.setColour (theme::accentTint5);
     g.fillRect (panel);
@@ -79,80 +151,49 @@ void IdleDropView::paint (juce::Graphics& g)
                     juce::Justification::centred);
     }
 
-    // --- ENGINE quality toggle, pinned to the panel bottom ---
-    {
-        const auto labelFont = theme::mono (8.5f, 0.12f);
-        const auto optionFont = theme::mono (9.5f, 0.1f);
-
-        const auto rowY = (int) (panel.getBottom() - 42.0f);
-        const auto captionY = rowY + 17;
-
-        const auto labelW = ui::textWidth (labelFont, "ENGINE");
-        const auto fastW = ui::textWidth (optionFont, "FAST");
-        const auto bestW = ui::textWidth (optionFont, "BEST");
-        const auto dotW = ui::textWidth (optionFont, juce::String::fromUTF8 ("\xc2\xb7"));
-        const auto gap = 10.0f;
-
-        const auto totalW = labelW + gap + fastW + gap + dotW + gap + bestW;
-        auto x = (float) getWidth() / 2.0f - totalW / 2.0f;
-
-        g.setFont (labelFont);
-        g.setColour (theme::text35);
-        g.drawText ("ENGINE", (int) x, rowY, (int) labelW + 2, 13, juce::Justification::centredLeft);
-        x += labelW + gap;
-
-        fastBounds = { (int) x - 4, rowY - 4, (int) fastW + 8, 21 };
-        g.setFont (optionFont);
-        g.setColour (quality == Quality::fast ? theme::accentSoft
-                                              : (hoveredOption == 1 ? theme::text60 : theme::text35));
-        g.drawText ("FAST", (int) x, rowY, (int) fastW + 2, 13, juce::Justification::centredLeft);
-        x += fastW + gap;
-
-        g.setColour (theme::text35);
-        g.drawText (juce::String::fromUTF8 ("\xc2\xb7"), (int) x, rowY, (int) dotW + 2, 13,
-                    juce::Justification::centredLeft);
-        x += dotW + gap;
-
-        bestBounds = { (int) x - 4, rowY - 4, (int) bestW + 8, 21 };
-        g.setColour (quality == Quality::best ? theme::accentSoft
-                                              : (hoveredOption == 2 ? theme::text60 : theme::text35));
-        g.drawText ("BEST", (int) x, rowY, (int) bestW + 2, 13, juce::Justification::centredLeft);
-
-        g.setFont (theme::mono (8.0f, 0.08f));
-        g.setColour (theme::text35);
-        g.drawText (quality == Quality::fast
-                        ? juce::String::fromUTF8 ("htdemucs \xc2\xb7 about realtime")
-                        : juce::String::fromUTF8 ("fine-tuned \xc3\x97 4 models \xc2\xb7 best quality \xc2\xb7 ~4\xc3\x97 slower"),
-                    (int) panel.getX(), captionY, (int) panel.getWidth(), 11,
-                    juce::Justification::centred);
-    }
 }
 
 void IdleDropView::mouseUp (const juce::MouseEvent& e)
 {
-    if (fastBounds.contains (e.getPosition()))
+    const auto p = e.getPosition();
+
+    if (fastBounds.contains (p) || bestBounds.contains (p))
     {
         if (onQualityChange != nullptr)
-            onQualityChange (Quality::fast);
+            onQualityChange (fastBounds.contains (p) ? Quality::fast : Quality::best);
         return;
     }
 
-    if (bestBounds.contains (e.getPosition()))
+    if (darkBounds.contains (p) || lightBounds.contains (p))
     {
-        if (onQualityChange != nullptr)
-            onQualityChange (Quality::best);
+        if (onModeChange != nullptr)
+            onModeChange (darkBounds.contains (p) ? theme::Mode::dark : theme::Mode::light);
         return;
     }
 
-    if (onBrowse != nullptr && getLocalBounds().contains (e.getPosition()))
+    if (purpleBounds.contains (p) || pinkBounds.contains (p))
+    {
+        if (onAccentChange != nullptr)
+            onAccentChange (purpleBounds.contains (p) ? theme::Accent::purple
+                                                      : theme::Accent::pink);
+        return;
+    }
+
+    if (onBrowse != nullptr && getLocalBounds().contains (p))
         onBrowse();
 }
 
 void IdleDropView::mouseMove (const juce::MouseEvent& e)
 {
-    const auto option = fastBounds.contains (e.getPosition()) ? 1
-                        : bestBounds.contains (e.getPosition()) ? 2
-                                                                : 0;
+    const auto p = e.getPosition();
+
+    const auto option = fastBounds.contains (p) ? 1
+                        : bestBounds.contains (p) ? 2
+                        : darkBounds.contains (p) ? 3
+                        : lightBounds.contains (p) ? 4
+                        : purpleBounds.contains (p) ? 5
+                        : pinkBounds.contains (p) ? 6
+                                                  : 0;
     if (option != hoveredOption)
     {
         hoveredOption = option;

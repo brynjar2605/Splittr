@@ -6,22 +6,32 @@ namespace splittr
 
 namespace
 {
-    constexpr int padX = 16, padY = 14, rowGap = 11;
-    constexpr int rowHeight = 9 + 20 + 7 + 36 + 9; // pad + title + gap + wave + pad
+    constexpr int padX = 16, padY = 14, rowGap = 6;
     constexpr int footerHeight = 13;
 } // namespace
 
 DoneView::DoneView()
 {
-    addAndMakeVisible (vocalsRow);
-    addAndMakeVisible (instrumentalRow);
+    for (int i = 0; i < numStems; ++i)
+    {
+        auto* r = rows.add (new StemRowComponent (juce::String (stemName (i)).toUpperCase(),
+                                                  i == stemVocals));
+        addAndMakeVisible (r);
+    }
 }
 
 void DoneView::update (const EngineSnapshot& s)
 {
-    statsText = juce::String (s.inferenceSeconds, 1) + " s"
-                + juce::String::fromUTF8 (" \xc2\xb7 ")
-                + juce::String (s.realtimeFactor, 2) + "x RT";
+    const auto dot = juce::String::fromUTF8 (" \xc2\xb7 ");
+
+    statsText.clear();
+
+    if (s.bpm > 0.0)
+        statsText << juce::String (s.bpm, 0) << " BPM" << dot;
+    if (s.key.isNotEmpty())
+        statsText << s.key << dot;
+
+    statsText << juce::String (s.realtimeFactor, 2) + "x RT";
     repaint();
 }
 
@@ -29,9 +39,11 @@ void DoneView::resized()
 {
     auto area = getLocalBounds().reduced (padX, padY);
 
-    vocalsRow.setBounds (area.removeFromTop (rowHeight));
-    area.removeFromTop (rowGap);
-    instrumentalRow.setBounds (area.removeFromTop (rowHeight));
+    for (auto* r : rows)
+    {
+        r->setBounds (area.removeFromTop (StemRowComponent::rowHeight));
+        area.removeFromTop (rowGap);
+    }
 }
 
 void DoneView::paint (juce::Graphics& g)
@@ -43,19 +55,24 @@ void DoneView::paint (juce::Graphics& g)
 
     auto x = footer.getX();
 
+    const auto drawAction = [&] (const juce::String& label, int actionId) -> juce::Rectangle<int>
+    {
+        const juce::Rectangle<int> r (x, footer.getY(), (int) ui::textWidth (font, label) + 2,
+                                      footer.getHeight());
+        g.setColour (hoveredAction == actionId ? theme::text : theme::text50);
+        g.drawText (label, r, juce::Justification::centredLeft);
+        x = r.getRight() + 14;
+        return r;
+    };
+
     g.setColour (theme::text50);
     g.drawText (statsText, x, footer.getY(), (int) ui::textWidth (font, statsText) + 2,
                 footer.getHeight(), juce::Justification::centredLeft);
-    x += (int) ui::textWidth (font, statsText) + 16;
+    x += (int) ui::textWidth (font, statsText) + 14;
 
-    revealBounds = { x, footer.getY(), (int) ui::textWidth (font, "REVEAL") + 2, footer.getHeight() };
-    g.setColour (hoveredAction == 1 ? theme::text : theme::text50);
-    g.drawText ("REVEAL", revealBounds, juce::Justification::centredLeft);
-    x = revealBounds.getRight() + 16;
-
-    newFileBounds = { x, footer.getY(), (int) ui::textWidth (font, "NEW FILE") + 2, footer.getHeight() };
-    g.setColour (hoveredAction == 2 ? theme::text : theme::text50);
-    g.drawText ("NEW FILE", newFileBounds, juce::Justification::centredLeft);
+    revealBounds = drawAction ("REVEAL", 1);
+    exportBounds = drawAction (juce::String::fromUTF8 ("EXPORT\xe2\x80\xa6"), 2);
+    newFileBounds = drawAction ("NEW FILE", 3);
 
     g.setColour (theme::accentSoft);
     g.drawText ("DRAG A ROW TO A TRACK", footer, juce::Justification::centredRight);
@@ -65,6 +82,8 @@ void DoneView::mouseUp (const juce::MouseEvent& e)
 {
     if (revealBounds.contains (e.getPosition()) && onReveal != nullptr)
         onReveal();
+    else if (exportBounds.contains (e.getPosition()) && onExport != nullptr)
+        onExport();
     else if (newFileBounds.contains (e.getPosition()) && onNewFile != nullptr)
         onNewFile();
 }
@@ -72,7 +91,8 @@ void DoneView::mouseUp (const juce::MouseEvent& e)
 void DoneView::mouseMove (const juce::MouseEvent& e)
 {
     const auto action = revealBounds.contains (e.getPosition()) ? 1
-                        : newFileBounds.contains (e.getPosition()) ? 2
+                        : exportBounds.contains (e.getPosition()) ? 2
+                        : newFileBounds.contains (e.getPosition()) ? 3
                                                                    : 0;
     if (action != hoveredAction)
     {

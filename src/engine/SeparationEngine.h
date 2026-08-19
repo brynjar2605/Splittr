@@ -7,6 +7,7 @@
 #include "Phase.h"
 #include "AudioFileIO.h"
 #include "ModelManager.h"
+#include "StemCache.h" // StemIndex / numStems
 
 namespace splittr
 {
@@ -23,8 +24,18 @@ struct EngineSnapshot
     double sourceDuration = 0.0;       // seconds
     std::vector<float> sourceWaveform; // 60 columns, 0..1
 
-    juce::File vocalsWav, instrumentalWav;
-    std::vector<float> vocalsWaveform, instrumentalWaveform;         // 70 columns
+    double bpm = 0.0;  // 0 = undetected
+    juce::String key;  // "F# MIN" etc., empty = undetected
+
+    struct StemInfo
+    {
+        juce::File wav;
+        std::vector<float> waveform; // 70 columns
+        float peakDb = -120.0f;
+    };
+
+    std::array<StemInfo, numStems> stems; // StemIndex order
+
     std::array<float, 4> sourcePeaksDb { -120.f, -120.f, -120.f, -120.f }; // drums,bass,other,vocals
     bool peaksKnown = false;
 
@@ -61,6 +72,10 @@ public:
     void restoreFromState (const juce::String& sourcePath);
 
     AudioFileIO& fileIO() { return io; }
+
+    // Export destination memory (Settings.xml)
+    juce::File lastExportDir() const { return models.lastExportDir(); }
+    void setLastExportDir (const juce::File& dir) { models.setLastExportDir (dir); }
 
     static constexpr double maxInputSeconds = 600.0; // v1 memory guard
 

@@ -6,6 +6,8 @@ using namespace splittr;
 SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor& p)
     : AudioProcessorEditor (&p), splittrProcessor (p)
 {
+    splittr::theme::loadFromSettings();
+
     addAndMakeVisible (content);
     content.addAndMakeVisible (headerBar);
     content.addChildComponent (idleView);
@@ -30,16 +32,30 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     idleView.onBrowse = [this] { browseForAudioFile(); };
     idleView.onQualityChange = [&engine] (splittr::Quality q) { engine.setQuality (q); };
 
+    idleView.onModeChange = [this] (splittr::theme::Mode m)
+    {
+        splittr::theme::apply (m, splittr::theme::currentAccent());
+        repaint();
+    };
+
+    idleView.onAccentChange = [this] (splittr::theme::Accent a)
+    {
+        splittr::theme::apply (splittr::theme::currentMode(), a);
+        repaint();
+    };
+
     downloadView.onCancel = [&engine] { engine.requestCancel(); };
     downloadView.onDownload = [&engine] { engine.startModelDownload(); };
     downloadView.onLocate = [this] { browseForModelFile(); };
 
     doneView.onReveal = [&engine]
     {
-        const auto file = engine.getSnapshot().vocalsWav;
+        const auto file = engine.getSnapshot().stems[splittr::stemVocals].wav;
         if (file.existsAsFile())
             file.revealToUser();
     };
+
+    doneView.onExport = [this] { exportStems(); };
 
     doneView.onNewFile = [&engine, &audition]
     {
@@ -47,25 +63,20 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         engine.requestNewFile();
     };
 
-    doneView.vocalsRow.onPlayToggle = [&engine, &audition]
-    { audition.toggle (engine.getSnapshot().vocalsWav, 0); };
-
-    doneView.instrumentalRow.onPlayToggle = [&engine, &audition]
-    { audition.toggle (engine.getSnapshot().instrumentalWav, 1); };
-
-    doneView.vocalsRow.onSeek = [&engine, &audition] (double f)
+    for (int i = 0; i < splittr::numStems; ++i)
     {
-        if (audition.currentStemId() != 0)
-            audition.toggle (engine.getSnapshot().vocalsWav, 0);
-        audition.seekFraction (f);
-    };
+        auto& row = doneView.row (i);
 
-    doneView.instrumentalRow.onSeek = [&engine, &audition] (double f)
-    {
-        if (audition.currentStemId() != 1)
-            audition.toggle (engine.getSnapshot().instrumentalWav, 1);
-        audition.seekFraction (f);
-    };
+        row.onPlayToggle = [&engine, &audition, i]
+        { audition.toggle (engine.getSnapshot().stems[(size_t) i].wav, i); };
+
+        row.onSeek = [&engine, &audition, i] (double f)
+        {
+            if (audition.currentStemId() != i)
+                audition.toggle (engine.getSnapshot().stems[(size_t) i].wav, i);
+            audition.seekFraction (f);
+        };
+    }
 
     setResizable (true, true); // native window edges + bottom-right corner grip
     getConstrainer()->setFixedAspectRatio ((double) theme::editorWidth / (double) theme::editorHeight);
@@ -152,6 +163,46 @@ void SplittrAudioProcessorEditor::browseForAudioFile()
                           });
 }
 
+void SplittrAudioProcessorEditor::exportStems()
+{
+    auto& engine = splittrProcessor.getEngine();
+    const auto snap = engine.getSnapshot();
+
+    if (snap.phase != splittr::Phase::Ready)
+        return;
+
+    const auto startDir = engine.lastExportDir().isDirectory()
+                              ? engine.lastExportDir()
+                              : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+
+    chooser = std::make_unique<juce::FileChooser> ("Choose a folder for the stems", startDir);
+
+    chooser->launchAsync (juce::FileBrowserComponent::openMode
+                              | juce::FileBrowserComponent::canSelectDirectories,
+                          [this, snap] (const juce::FileChooser& fc)
+                          {
+                              const auto dir = fc.getResult();
+
+                              if (! dir.isDirectory())
+                                  return;
+
+                              splittrProcessor.getEngine().setLastExportDir (dir);
+
+                              const auto base = snap.sourceFile.getFileNameWithoutExtension();
+
+                              for (int i = 0; i < splittr::numStems; ++i)
+                              {
+                                  const auto& wav = snap.stems[(size_t) i].wav;
+
+                                  if (wav.existsAsFile())
+                                      wav.copyFileTo (dir.getChildFile (
+                                          base + " - " + splittr::stemName (i) + ".wav"));
+                              }
+
+                              dir.revealToUser(); // confirmation: show the result in Finder
+                          });
+}
+
 void SplittrAudioProcessorEditor::browseForModelFile()
 {
     chooser = std::make_unique<juce::FileChooser> (
@@ -189,9 +240,18 @@ static bool applyUiPreview (splittr::EngineSnapshot& s, double clock)
     s.sourceFile = juce::File ("~/Music/MIDNIGHT_TAKE3.WAV");
     s.sourceDuration = 228.0;
     s.sourceWaveform = fakeWave (60, 1.0f);
-    s.vocalsWaveform = fakeWave (70, 2.0f);
-    s.instrumentalWaveform = fakeWave (70, 3.0f);
+
+    static const float previewPeaks[splittr::numStems] = { -6.2f, -9.8f, -11.4f, -7.9f, -4.1f };
+
+    for (int i = 0; i < splittr::numStems; ++i)
+    {
+        s.stems[(size_t) i].waveform = fakeWave (70, 2.0f + (float) i);
+        s.stems[(size_t) i].peakDb = previewPeaks[i];
+    }
+
     s.sourcePeaksDb = { -9.8f, -11.4f, -7.9f, -6.2f };
+    s.bpm = 124.0;
+    s.key = "F# MIN";
     s.progress = p;
 
     if (mode == "firstrun")
@@ -247,7 +307,7 @@ void SplittrAudioProcessorEditor::timerCallback()
                        : juce::String ("4-SOURCE ANALYSIS");
             break;
         case Phase::Ready:
-            meta = juce::String::fromUTF8 ("OUTPUT 2 \xc3\x97 WAV \xc2\xb7 32-BIT FLOAT \xc2\xb7 44.1 kHz");
+            meta = juce::String::fromUTF8 ("OUTPUT 5 \xc3\x97 WAV \xc2\xb7 32-BIT FLOAT \xc2\xb7 44.1 kHz");
             break;
         case Phase::Error: meta = snap.message; break;
         case Phase::Idle: break;
@@ -286,11 +346,12 @@ void SplittrAudioProcessorEditor::timerCallback()
         const auto pos = audition.positionSeconds();
         const auto len = audition.lengthSeconds();
 
-        doneView.vocalsRow.update (snap.vocalsWav, snap.vocalsWaveform,
-                                   playingStem == 0, pos,
-                                   playingStem == 0 ? len : snap.sourceDuration);
-        doneView.instrumentalRow.update (snap.instrumentalWav, snap.instrumentalWaveform,
-                                         playingStem == 1, pos,
-                                         playingStem == 1 ? len : snap.sourceDuration);
+        for (int i = 0; i < splittr::numStems; ++i)
+        {
+            const auto& stem = snap.stems[(size_t) i];
+            doneView.row (i).update (stem.wav, stem.waveform, stem.peakDb,
+                                     playingStem == i, pos,
+                                     playingStem == i ? len : snap.sourceDuration);
+        }
     }
 }

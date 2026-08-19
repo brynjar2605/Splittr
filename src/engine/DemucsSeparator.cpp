@@ -290,13 +290,20 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
     }
 
     out.vocals.setSize (2, numSamples);
+    out.drums.setSize (2, numSamples);
+    out.bass.setSize (2, numSamples);
+    out.other.setSize (2, numSamples);
     out.instrumental.setSize (2, numSamples);
 
     std::array<float, 4> peaks {};
+    float instrumentalPeak = 0.0f;
 
     for (int ch = 0; ch < 2; ++ch)
     {
         auto* vocals = out.vocals.getWritePointer (ch);
+        auto* drumsOut = out.drums.getWritePointer (ch);
+        auto* bassOut = out.bass.getWritePointer (ch);
+        auto* otherOut = out.other.getWritePointer (ch);
         auto* instrumental = out.instrumental.getWritePointer (ch);
 
         for (int i = 0; i < numSamples; ++i)
@@ -307,17 +314,23 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
             const float vox = targets (3, ch, i);
 
             vocals[i] = vox;
+            drumsOut[i] = drums;
+            bassOut[i] = bass;
+            otherOut[i] = other;
             instrumental[i] = drums + bass + other;
 
             peaks[0] = juce::jmax (peaks[0], std::abs (drums));
             peaks[1] = juce::jmax (peaks[1], std::abs (bass));
             peaks[2] = juce::jmax (peaks[2], std::abs (other));
             peaks[3] = juce::jmax (peaks[3], std::abs (vox));
+            instrumentalPeak = juce::jmax (instrumentalPeak, std::abs (instrumental[i]));
         }
     }
 
     for (size_t s = 0; s < peaks.size(); ++s)
         out.sourcePeaksDb[s] = peakToDb (peaks[s]);
+
+    out.instrumentalPeakDb = peakToDb (instrumentalPeak);
 
     return Status::ok;
 }

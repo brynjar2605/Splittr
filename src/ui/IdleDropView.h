@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include "engine/ModelManager.h" // Quality
+#include "Theme.h"
 
 namespace splittr
 {
@@ -17,6 +18,8 @@ public:
 
     std::function<void()> onBrowse;
     std::function<void (Quality)> onQualityChange;
+    std::function<void (theme::Mode)> onModeChange;
+    std::function<void (theme::Accent)> onAccentChange;
 
     void setDragOver (bool);
     void setErrorMessage (const juce::String&);
@@ -32,8 +35,15 @@ private:
     juce::String errorMessage;
     Quality quality = Quality::fast;
 
-    juce::Rectangle<int> fastBounds, bestBounds; // computed in paint
-    int hoveredOption = 0;                       // 0 none, 1 fast, 2 best
+    // Segmented switch: draws [a|b] at x, returns bounds of both cells.
+    std::pair<juce::Rectangle<int>, juce::Rectangle<int>>
+    drawSwitch (juce::Graphics&, int x, int y, const juce::String& a, const juce::String& b,
+                bool bActive, int hoverIdA, int hoverIdB, int cellWidth) const;
+
+    juce::Rectangle<int> fastBounds, bestBounds;       // computed in paint
+    juce::Rectangle<int> darkBounds, lightBounds;      //
+    juce::Rectangle<int> purpleBounds, pinkBounds;     //
+    int hoveredOption = 0; // 0 none, 1 fast, 2 best, 3 dark, 4 light, 5 purple, 6 pink
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IdleDropView)
 };

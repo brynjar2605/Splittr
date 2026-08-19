@@ -13,9 +13,14 @@ enum class Source { drums = 0, bass = 1, other = 2, vocals = 3 };
 
 struct SeparationResult
 {
-    juce::AudioBuffer<float> vocals;       // stereo, 44.1 kHz
+    // stereo, 44.1 kHz
+    juce::AudioBuffer<float> vocals;
+    juce::AudioBuffer<float> drums;
+    juce::AudioBuffer<float> bass;
+    juce::AudioBuffer<float> other;
     juce::AudioBuffer<float> instrumental; // drums + bass + other, summed
     std::array<float, 4> sourcePeaksDb {}; // drums, bass, other, vocals
+    float instrumentalPeakDb = -120.0f;
 };
 
 // Wraps demucs.cpp. This is the ONLY translation unit that touches

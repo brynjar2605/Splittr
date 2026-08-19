@@ -78,6 +78,27 @@ juce::File ModelManager::userModelDir() const
     return juce::File (readSettings()->getStringAttribute ("modelDir"));
 }
 
+void ModelManager::setLastExportDir (const juce::File& dir)
+{
+    if (dir.isDirectory())
+        writeSetting ("exportDir", dir.getFullPathName());
+}
+
+juce::File ModelManager::lastExportDir() const
+{
+    return juce::File (readSettings()->getStringAttribute ("exportDir"));
+}
+
+juce::String ModelManager::getUiSetting (const juce::String& attribute, const juce::String& fallback)
+{
+    return readSettings()->getStringAttribute (attribute, fallback);
+}
+
+void ModelManager::setUiSetting (const juce::String& attribute, const juce::String& value)
+{
+    writeSetting (attribute, value);
+}
+
 std::vector<juce::File> ModelManager::filesFor (Quality q) const
 {
     const auto userDir = userModelDir();

@@ -1,14 +1,15 @@
 # Splittr
 
-AU / VST3 plugin for Ableton Live (macOS) that splits a song into **Vocals** and
-**Instrumental** stems with AI source separation — drop an audio file on the
-plugin, audition the stems, drag them out onto your tracks.
+AU / VST3 plugin for Ableton Live (macOS) that splits a song into stems with
+AI source separation — drop an audio file on the plugin, audition the stems,
+drag them onto your tracks or export them to a folder.
 
 Separation runs fully offline on your machine using Meta's pretrained
 **Demucs v4 (htdemucs)** model via the C++ port
 [demucs.cpp](https://github.com/sevagh/demucs.cpp) — no cloud, no account,
-no training. The four htdemucs sources map to two stems: `vocals` is used
-as-is; `drums + bass + other` are summed into the instrumental.
+no training. Every scan produces **five stems**: the four htdemucs sources
+(**Vocals, Drums, Bass, Other**) plus **Instrumental** (drums + bass + other,
+summed), and detects the track's **BPM and key** along the way.
 
 ## Building
 
@@ -47,6 +48,13 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   **BEST** uses the fine-tuned `htdemucs_ft` ensemble — four specialist
   models, one per source — for noticeably cleaner stems at ~4× the time.
   BEST downloads its 4 × 84 MB weights once on first use.
+- **EXPORT…** (done screen) copies all five stems, named
+  `<song> - <Stem>.wav`, to a folder you choose (remembered for next time);
+  **REVEAL** opens the internal cache in Finder.
+- **THEME / ACCENT** switches (idle screen): dark or light UI, purple or pink
+  accent. Preferences are global and persist.
+- BPM/key detection is a hint (onset autocorrelation + chromagram): reliable
+  on steady-tempo tonal material, approximate on rubato or atonal tracks.
 - Input: wav / aiff / mp3 / flac / m4a / ogg, up to 10 minutes (v1 limit).
 - Separation runs at very roughly realtime speed on Apple Silicon — a 4-minute
   song takes a few minutes. Live keeps playing; the work happens on a

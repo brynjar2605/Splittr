@@ -29,6 +29,7 @@ private:
     void timerCallback() override;
     void browseForAudioFile();
     void browseForModelFile();
+    void exportStems();
     static bool isSupportedAudioFile (const juce::String& path);
 
     SplittrAudioProcessor& splittrProcessor;

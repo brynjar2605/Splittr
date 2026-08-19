@@ -23,8 +23,10 @@ CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
 {
     CachedStems entry;
     entry.dir = cacheRoot().getChildFile (keyFor (source, quality));
-    entry.vocals = entry.dir.getChildFile ("Vocals.wav");
-    entry.instrumental = entry.dir.getChildFile ("Instrumental.wav");
+
+    for (int i = 0; i < numStems; ++i)
+        entry.stems[(size_t) i] = entry.dir.getChildFile (juce::String (stemName (i)) + ".wav");
+
     entry.meta = entry.dir.getChildFile ("meta.xml");
     return entry;
 }
@@ -33,11 +35,18 @@ void StemCache::prune (juce::int64 maxBytes)
 {
     auto entries = cacheRoot().findChildFiles (juce::File::findDirectories, false);
 
+    const auto entryBytes = [] (const juce::File& dir)
+    {
+        juce::int64 bytes = 0;
+        for (int i = 0; i < numStems; ++i)
+            bytes += dir.getChildFile (juce::String (stemName (i)) + ".wav").getSize();
+        return bytes;
+    };
+
     juce::int64 total = 0;
 
     for (const auto& dir : entries)
-        total += dir.getChildFile ("Vocals.wav").getSize()
-                 + dir.getChildFile ("Instrumental.wav").getSize();
+        total += entryBytes (dir);
 
     if (total <= maxBytes)
         return;
@@ -51,9 +60,7 @@ void StemCache::prune (juce::int64 maxBytes)
         if (total <= maxBytes)
             break;
 
-        total -= dir.getChildFile ("Vocals.wav").getSize()
-                 + dir.getChildFile ("Instrumental.wav").getSize();
-
+        total -= entryBytes (dir);
         dir.deleteRecursively();
     }
 }
