@@ -49,14 +49,20 @@ void SplittrAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     juce::XmlElement xml ("SplittrState");
     xml.setAttribute ("sourcePath", engine.sourcePathForState());
+    xml.setAttribute ("editorScale", (double) editorScale.load());
     copyXmlToBinary (xml, destData);
 }
 
 void SplittrAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
+    {
         if (xml->hasTagName ("SplittrState"))
+        {
             engine.restoreFromState (xml->getStringAttribute ("sourcePath"));
+            editorScale.store ((float) xml->getDoubleAttribute ("editorScale", 1.0));
+        }
+    }
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

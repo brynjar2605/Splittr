@@ -35,9 +35,13 @@ public:
     splittr::SeparationEngine& getEngine() { return engine; }
     splittr::AuditionPlayer& getAudition() { return audition; }
 
+    float getEditorScale() const { return editorScale.load(); }
+    void setEditorScale (float s) { editorScale.store (s); }
+
 private:
     splittr::SeparationEngine engine;
     splittr::AuditionPlayer audition { engine.fileIO().formats() };
+    std::atomic<float> editorScale { 1.0f };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessor)
 };

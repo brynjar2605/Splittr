@@ -2,6 +2,9 @@
 
 #include <model.hpp>
 
+#include <mutex>
+#include <thread>
+
 namespace splittr
 {
 
@@ -12,6 +15,170 @@ namespace
     float peakToDb (float peak)
     {
         return juce::Decibels::gainToDecibels (peak, -120.0f);
+    }
+
+    // Chunked multi-threaded inference, after demucs.cpp's
+    // cli-apps/threaded_inference.hpp: the track is split into N contiguous
+    // chunks padded with 0.75 s of neighbouring audio on each side; each chunk
+    // runs a full demucs_inference on its own thread; the outputs are
+    // crossfaded over the overlap and weight-normalised.
+    constexpr int kOverlapSamples = (int) (0.75 * 44100.0);
+    constexpr int kMinSamplesPerChunk = 30 * 44100; // don't over-chunk short files
+    constexpr int kMaxChunks = 4;
+
+    int chooseNumChunks (int numSamples)
+    {
+        const auto byCpu = juce::jlimit (1, kMaxChunks,
+                                         (int) std::thread::hardware_concurrency() / 2);
+        const auto byLength = juce::jmax (1, numSamples / kMinSamplesPerChunk);
+        return juce::jmin (byCpu, byLength);
+    }
+
+    // May throw CancelledException (user cancel, via sharedCb) or
+    // std::runtime_error (a worker failed).
+    Eigen::Tensor3dXf chunkedInference (const demucscpp::demucs_model& model,
+                                        const Eigen::MatrixXf& audio,
+                                        int numChunks,
+                                        const demucscpp::ProgressCallback& sharedCb)
+    {
+        const auto total = (int) audio.cols();
+
+        if (numChunks <= 1)
+            return demucscpp::demucs_inference (model, audio, sharedCb);
+
+        const auto chunkLen = (total + numChunks - 1) / numChunks;
+
+        // --- build padded chunks ---
+        std::vector<Eigen::MatrixXf> chunks;
+
+        for (int i = 0; i < numChunks; ++i)
+        {
+            const auto start = i * chunkLen;
+            const auto end = juce::jmin (total, start + chunkLen);
+
+            Eigen::MatrixXf chunk = Eigen::MatrixXf::Zero (2, end - start + 2 * kOverlapSamples);
+
+            if (i == 0) // repeat the first sample as head padding
+                chunk.block (0, 0, 2, kOverlapSamples).colwise() = audio.col (0);
+            else
+                chunk.block (0, 0, 2, kOverlapSamples) =
+                    audio.block (0, start - kOverlapSamples, 2, kOverlapSamples);
+
+            if (i == numChunks - 1) // whatever remains (zero-padded tail)
+            {
+                const auto remaining = juce::jmin (kOverlapSamples, total - end);
+                if (remaining > 0)
+                    chunk.block (0, end - start + kOverlapSamples, 2, remaining) =
+                        audio.block (0, end, 2, remaining);
+            }
+            else
+            {
+                chunk.block (0, end - start + kOverlapSamples, 2, kOverlapSamples) =
+                    audio.block (0, end, 2, kOverlapSamples);
+            }
+
+            chunk.block (0, kOverlapSamples, 2, end - start) = audio.block (0, start, 2, end - start);
+            chunks.push_back (std::move (chunk));
+        }
+
+        // --- run workers ---
+        std::vector<Eigen::Tensor3dXf> outs ((size_t) numChunks);
+        std::vector<float> progress ((size_t) numChunks, 0.0f);
+        std::mutex cbMutex;
+        std::atomic<bool> cancelled { false };
+        std::atomic<bool> failed { false };
+        std::string firstError;
+
+        std::vector<std::thread> workers;
+
+        for (int i = 0; i < numChunks; ++i)
+        {
+            workers.emplace_back ([&, i]
+            {
+                demucscpp::ProgressCallback chunkCb =
+                    [&, i] (float p, const std::string& message)
+                {
+                    const std::lock_guard<std::mutex> lock (cbMutex);
+
+                    if (cancelled.load())
+                        throw CancelledException {};
+
+                    progress[(size_t) i] = p;
+
+                    auto sum = 0.0f;
+                    for (auto v : progress)
+                        sum += v;
+
+                    sharedCb (sum / (float) numChunks, message); // may throw CancelledException
+                };
+
+                try
+                {
+                    outs[(size_t) i] = demucscpp::demucs_inference (model, chunks[(size_t) i], chunkCb);
+                }
+                catch (const CancelledException&)
+                {
+                    cancelled.store (true);
+                }
+                catch (const std::exception& e)
+                {
+                    const std::lock_guard<std::mutex> lock (cbMutex);
+                    if (firstError.empty())
+                        firstError = e.what();
+                    failed.store (true);
+                    cancelled.store (true); // make siblings bail at their next callback
+                }
+            });
+        }
+
+        for (auto& worker : workers)
+            worker.join();
+
+        if (failed.load())
+            throw std::runtime_error (firstError.empty() ? "inference failed" : firstError);
+
+        if (cancelled.load())
+            throw CancelledException {};
+
+        // --- crossfade-stitch ---
+        Eigen::Tensor3dXf result (4, 2, total);
+        result.setZero();
+
+        std::vector<float> weightSum ((size_t) total, 0.0f);
+
+        for (int i = 0; i < numChunks; ++i)
+        {
+            const auto start = i * chunkLen;
+            const auto paddedLen = (int) outs[(size_t) i].dimension (2);
+
+            for (int j = 0; j < paddedLen; ++j)
+            {
+                const auto g = start + j - kOverlapSamples;
+
+                if (g < 0 || g >= total)
+                    continue;
+
+                auto w = 1.0f;
+                if (j < kOverlapSamples)
+                    w = (float) (j + 1) / (float) (kOverlapSamples + 1);
+                else if (j >= paddedLen - kOverlapSamples)
+                    w = (float) (paddedLen - j) / (float) (kOverlapSamples + 1);
+
+                for (int t = 0; t < 4; ++t)
+                    for (int ch = 0; ch < 2; ++ch)
+                        result (t, ch, g) += outs[(size_t) i] (t, ch, j) * w;
+
+                weightSum[(size_t) g] += w;
+            }
+        }
+
+        for (int g = 0; g < total; ++g)
+            if (weightSum[(size_t) g] > 0.0f)
+                for (int t = 0; t < 4; ++t)
+                    for (int ch = 0; ch < 2; ++ch)
+                        result (t, ch, g) /= weightSum[(size_t) g];
+
+        return result;
     }
 } // namespace
 
@@ -79,7 +246,7 @@ DemucsSeparator::Status DemucsSeparator::separate (const juce::File& modelFile,
 
     try
     {
-        targets = demucscpp::demucs_inference (model, audio, progressCallback);
+        targets = chunkedInference (model, audio, chooseNumChunks (numSamples), progressCallback);
     }
     catch (const CancelledException&)
     {

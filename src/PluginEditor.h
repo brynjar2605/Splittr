@@ -33,6 +33,10 @@ private:
 
     SplittrAudioProcessor& splittrProcessor;
 
+    // All UI lives on this fixed 560x380 surface; window resizing scales it
+    // uniformly via an AffineTransform (aspect ratio locked).
+    juce::Component content;
+
     splittr::HeaderBar headerBar;
     splittr::IdleDropView idleView;
     splittr::DownloadView downloadView;

@@ -6,11 +6,23 @@ using namespace splittr;
 SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor& p)
     : AudioProcessorEditor (&p), splittrProcessor (p)
 {
-    addAndMakeVisible (headerBar);
-    addChildComponent (idleView);
-    addChildComponent (downloadView);
-    addChildComponent (workingView);
-    addChildComponent (doneView);
+    addAndMakeVisible (content);
+    content.addAndMakeVisible (headerBar);
+    content.addChildComponent (idleView);
+    content.addChildComponent (downloadView);
+    content.addChildComponent (workingView);
+    content.addChildComponent (doneView);
+
+    // Fixed design-space layout; the window scales this surface uniformly.
+    content.setBounds (0, 0, theme::editorWidth, theme::editorHeight);
+    {
+        auto bounds = content.getLocalBounds();
+        headerBar.setBounds (bounds.removeFromTop (theme::headerHeight));
+        idleView.setBounds (bounds);
+        downloadView.setBounds (bounds);
+        workingView.setBounds (bounds);
+        doneView.setBounds (bounds);
+    }
 
     auto& engine = splittrProcessor.getEngine();
     auto& audition = splittrProcessor.getAudition();
@@ -54,7 +66,15 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         audition.seekFraction (f);
     };
 
-    setSize (theme::editorWidth, theme::editorHeight);
+    setResizable (true, true); // native window edges + bottom-right corner grip
+    getConstrainer()->setFixedAspectRatio ((double) theme::editorWidth / (double) theme::editorHeight);
+    setResizeLimits (theme::editorWidth, theme::editorHeight,
+                     theme::editorWidth * 4, theme::editorHeight * 4);
+
+    const auto scale = juce::jlimit (1.0f, 4.0f, splittrProcessor.getEditorScale());
+    setSize (juce::roundToInt (theme::editorWidth * scale),
+             juce::roundToInt (theme::editorHeight * scale));
+
     startTimerHz (30);
 
     engine.editorOpened();
@@ -69,13 +89,10 @@ void SplittrAudioProcessorEditor::paint (juce::Graphics& g)
 
 void SplittrAudioProcessorEditor::resized()
 {
-    auto bounds = getLocalBounds();
-    headerBar.setBounds (bounds.removeFromTop (theme::headerHeight));
+    const auto scale = (float) getWidth() / (float) theme::editorWidth;
 
-    idleView.setBounds (bounds);
-    downloadView.setBounds (bounds);
-    workingView.setBounds (bounds);
-    doneView.setBounds (bounds);
+    content.setTransform (juce::AffineTransform::scale (scale));
+    splittrProcessor.setEditorScale (scale);
 }
 
 bool SplittrAudioProcessorEditor::isSupportedAudioFile (const juce::String& path)
