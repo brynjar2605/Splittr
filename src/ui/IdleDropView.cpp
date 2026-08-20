@@ -7,9 +7,11 @@ namespace splittr
 namespace
 {
     constexpr int padX = 16;
-    constexpr int topRowY = 14;          // ENGINE row
-    constexpr int panelTop = 44;         // below the ENGINE row
-    constexpr int panelBottomInset = 14; // the bottom row moved to settings
+    constexpr int topRowY = 14;              // ENGINE row
+    constexpr int bottomRowHeight = 13;      // LIBRARY row
+    constexpr int bottomRowInset = 14;       // its distance from the bottom edge
+    constexpr int panelTop = 44;             // below the ENGINE row
+    constexpr int panelBottomInset = 35;     // above the LIBRARY row
 } // namespace
 
 IdleDropView::IdleDropView()
@@ -63,7 +65,7 @@ void IdleDropView::paint (juce::Graphics& g)
                     juce::Justification::centredRight);
     }
 
-    // With THEME/ACCENT gone the panel reclaims the whole lower half.
+    // The panel fills everything between the two rows.
     auto panel = getLocalBounds()
                      .reduced (padX, 0)
                      .withTop (panelTop)
@@ -108,6 +110,11 @@ void IdleDropView::paint (juce::Graphics& g)
                     juce::Rectangle<float> (panel.getX(), centre.y + 26.0f, panel.getWidth(), 12.0f),
                     juce::Justification::centred);
     }
+
+    // --- LIBRARY: everything ever split, straight out of the stem cache ---
+    libraryBounds = ui::drawTextAction (g, "LIBRARY", padX,
+                                        getHeight() - bottomRowInset - bottomRowHeight,
+                                        bottomRowHeight, hoveredOption == 3);
 }
 
 void IdleDropView::mouseUp (const juce::MouseEvent& e)
@@ -122,6 +129,14 @@ void IdleDropView::mouseUp (const juce::MouseEvent& e)
         return;
     }
 
+    if (libraryBounds.contains (p))
+    {
+        if (onLibrary != nullptr)
+            onLibrary();
+
+        return;
+    }
+
     if (onBrowse != nullptr && getLocalBounds().contains (p))
         onBrowse();
 }
@@ -130,9 +145,10 @@ void IdleDropView::mouseMove (const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
 
-    const auto option = fastBounds.contains (p)   ? 1
-                        : bestBounds.contains (p) ? 2
-                                                  : 0;
+    const auto option = fastBounds.contains (p)      ? 1
+                        : bestBounds.contains (p)    ? 2
+                        : libraryBounds.contains (p) ? 3
+                                                     : 0;
     if (option != hoveredOption)
     {
         hoveredOption = option;

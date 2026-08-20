@@ -16,6 +16,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     content.addChildComponent (workingView);
     content.addChildComponent (doneView);
     content.addChildComponent (confirmView);
+    content.addChildComponent (libraryView);
     content.addChildComponent (settingsView); // added last: sits on top
 
     // Fixed design-space layout; the window scales this surface uniformly.
@@ -28,6 +29,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         workingView.setBounds (bounds);
         doneView.setBounds (bounds);
         confirmView.setBounds (bounds);
+        libraryView.setBounds (bounds);
         settingsView.setBounds (bounds);
     }
 
@@ -37,8 +39,18 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     idleView.onBrowse = [this] { browseForAudioFile(); };
     idleView.onQualityChange = [&engine] (splittr::Quality q) { engine.setQuality (q); };
 
+    idleView.onLibrary = [this]
+    {
+        libraryView.refresh(); // a dir scan; cheap enough to redo on every open
+        showLibrary = true;
+    };
+
     // Settings is reachable from every state — the header is always up.
-    headerBar.onSettings = [this] { showSettings = ! showSettings; };
+    headerBar.onSettings = [this]
+    {
+        showLibrary = false;
+        showSettings = ! showSettings;
+    };
 
     settingsView.onClose = [this] { showSettings = false; };
 
@@ -52,6 +64,23 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     {
         splittr::theme::apply (splittr::theme::currentMode(), hue, commit);
         repaint();
+    };
+
+    libraryView.onClose = [this] { showLibrary = false; };
+
+    libraryView.onOpenEntry = [this, &engine, &audition] (juce::File cacheDir)
+    {
+        audition.stop();
+
+        if (engine.openCachedEntry (cacheDir))
+        {
+            showLibrary = false;
+            pendingFile = juce::File(); // nothing left to confirm
+        }
+        else
+        {
+            libraryView.refresh(); // the entry went away underneath us
+        }
     };
 
     downloadView.onCancel = [&engine] { engine.requestCancel(); };
@@ -412,6 +441,7 @@ void SplittrAudioProcessorEditor::timerCallback()
     workingView.setVisible (showWorking);
     doneView.setVisible (showDone);
     confirmView.setVisible (confirming);
+    libraryView.setVisible (showLibrary);
     settingsView.setVisible (showSettings);
 
     if (showIdle)

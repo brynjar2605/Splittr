@@ -8,16 +8,18 @@ namespace splittr
 {
 
 // Idle / drop-target state (borrowed from concept 2c per the handoff):
-// dashed purple panel, "drop an audio file into this window", and the ENGINE
-// quality-vs-speed toggle (FAST / BEST) above it. THEME/ACCENT live in the
-// settings overlay; ENGINE stays here because it is a per-song choice. Also
-// renders the short error reason when the engine is in the Error phase.
+// dashed purple panel, "drop an audio file into this window", the ENGINE
+// quality-vs-speed toggle (FAST / BEST) above it and the LIBRARY entry point
+// below. THEME/ACCENT live in the settings overlay; ENGINE stays here because
+// it is a per-song choice. Also renders the short error reason when the engine
+// is in the Error phase.
 class IdleDropView : public juce::Component
 {
 public:
     IdleDropView();
 
     std::function<void()> onBrowse;
+    std::function<void()> onLibrary;
     std::function<void (Quality)> onQualityChange;
 
     void setDragOver (bool);
@@ -35,7 +37,8 @@ private:
     Quality quality = Quality::fast;
 
     juce::Rectangle<int> fastBounds, bestBounds; // computed in paint
-    int hoveredOption = 0;                       // 0 none, 1 fast, 2 best
+    juce::Rectangle<int> libraryBounds;          //
+    int hoveredOption = 0;                       // 0 none, 1 fast, 2 best, 3 library
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IdleDropView)
 };
