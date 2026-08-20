@@ -32,6 +32,11 @@ inline juce::Colour accentTint5 = rgba (168, 132, 240, 0.05f);
 inline juce::Colour accentTint15 = rgba (168, 132, 240, 0.15f);
 inline juce::Colour gridLine = rgba (168, 132, 240, 0.09f);
 
+// Fixed green for the scanning trail in the working view -- deliberately not
+// accent-derived, so "burning through the song" reads the same whatever hue
+// the user picked. Adjusted per mode so it stays legible on both grounds.
+inline juce::Colour scanEmber { 0xff5CC463 };
+
 inline juce::Colour text { 0xffDDD6E6 };
 inline juce::Colour text60 = rgba (221, 214, 230, 0.60f);
 inline juce::Colour text55 = rgba (221, 214, 230, 0.55f);

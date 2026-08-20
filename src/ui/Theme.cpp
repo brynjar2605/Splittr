@@ -61,6 +61,8 @@ void apply (Mode newMode, float newAccentHue, bool persist)
     accentTint40 = tintBase.withAlpha (0.40f);
     gridLine = tintBase.withAlpha (mode == Mode::dark ? 0.09f : 0.12f);
 
+    scanEmber = mode == Mode::dark ? juce::Colour (0xff5CC463) : juce::Colour (0xff2E9E46);
+
     text = ink (mode == Mode::dark ? 1.0f : 0.92f);
     text70 = ink (0.70f);
     text60 = ink (0.60f);

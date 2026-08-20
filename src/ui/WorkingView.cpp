@@ -1,5 +1,6 @@
 #include "WorkingView.h"
 #include "Common.h"
+#include "Ember.h"
 
 namespace splittr
 {
@@ -33,6 +34,7 @@ WorkingView::WorkingView()
 void WorkingView::update (double clockSeconds, const EngineSnapshot& s)
 {
     snap = s;
+    clock = clockSeconds;
     bar.update (clockSeconds, s.progress);
     repaint();
 }
@@ -85,7 +87,9 @@ void WorkingView::paint (juce::Graphics& g)
     g.setColour (theme::lineStrong);
     g.drawRect (box, 1);
 
-    // 60 bars, 1px gap, centred vertically, inner padding 0 4px
+    // 60 bars, 1px gap, centred vertically, inner padding 0 4px. Columns the
+    // HEAD has already burned through get the ember flicker in green; the ones
+    // ahead of it stay exactly as they were.
     {
         auto inner = box.reduced (5, 1).toFloat();
         const int cols = (int) snap.sourceWaveform.size();
@@ -94,13 +98,30 @@ void WorkingView::paint (juce::Graphics& g)
         {
             const auto colW = (inner.getWidth() - (float) (cols - 1)) / (float) cols;
 
-            g.setColour (theme::text55);
+            // The playhead is drawn across the whole box, so express it in the
+            // bar strip's coordinates or the flame lags the line.
+            const auto headX = (float) box.getX()
+                               + juce::jlimit (0.0f, 1.0f, snap.progress) * (float) box.getWidth();
+            const auto head = (headX - inner.getX()) / juce::jmax (1.0f, inner.getWidth());
 
             for (int i = 0; i < cols; ++i)
             {
                 const auto h = juce::jmax (1.0f, snap.sourceWaveform[(size_t) i] * inner.getHeight());
                 const auto x = inner.getX() + (float) i * (colW + 1.0f);
-                g.fillRect (x, inner.getCentreY() - h * 0.5f, colW, h);
+                const auto y = inner.getCentreY() - h * 0.5f;
+
+                const auto centre = ((float) i + 0.5f) / (float) cols;
+                const auto ramp = ui::emberRamp (centre, head);
+
+                g.setColour (theme::text55.withMultipliedAlpha (1.0f - 0.75f * ramp));
+                g.fillRect (x, y, colW, h);
+
+                if (ramp > 0.0f)
+                {
+                    g.setColour (theme::scanEmber.withAlpha (
+                        ui::emberAlpha (ui::emberFor (i), clock, ramp, 0.0f)));
+                    g.fillRect (x, y, colW, h);
+                }
             }
         }
     }
