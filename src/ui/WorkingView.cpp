@@ -66,7 +66,7 @@ void WorkingView::paint (juce::Graphics& g)
     g.setFont (theme::mono (9.0f, 0.1f));
     g.drawText ("0:00", ruler, juce::Justification::centredLeft);
 
-    auto centreLabel = snap.sourceFile.getFileName().toUpperCase();
+    auto centreLabel = ui::upperCased (snap.sourceFile.getFileName());
     if (snap.bpm > 0.0)
         centreLabel += juce::String::fromUTF8 (" \xc2\xb7 ") + juce::String (snap.bpm, 0) + " BPM";
     if (snap.key.isNotEmpty())

@@ -19,6 +19,48 @@ inline juce::String mmss (double seconds)
     return juce::String (total / 60) + ":" + juce::String (total % 60).paddedLeft ('0', 2);
 }
 
+// juce::String::toUpperCase() maps only ASCII (towupper under the "C" locale),
+// so accented filenames render half-lowercase ("TýNDA KYNSLóðIN.MP3"). Map
+// Latin-1 Supplement and Latin Extended-A explicitly; anything further out is
+// left alone, same as before.
+inline juce::juce_wchar upperCased (juce::juce_wchar c)
+{
+    if (c >= 0x00e0 && c <= 0x00fe && c != 0x00f7)  // à..þ, skipping ÷
+        return c - 0x20;
+
+    if (c == 0x00ff) return 0x0178;  // ÿ -> Ÿ
+    if (c == 0x0131) return 0x0049;  // ı -> I
+    if (c == 0x017f) return 0x0053;  // ſ -> S
+
+    // Latin Extended-A upper/lower pairs. ĸ (0x0138), ŉ (0x0149) and Ÿ
+    // (0x0178) sit between the ranges and have no lowercase-to-uppercase map.
+    if ((c >= 0x0100 && c <= 0x0137) || (c >= 0x014a && c <= 0x0177))
+        return (c & 1) != 0 ? c - 1 : c;  // even upper, odd lower
+
+    if ((c >= 0x0139 && c <= 0x0148) || (c >= 0x0179 && c <= 0x017e))
+        return (c & 1) != 0 ? c : c - 1;  // odd upper, even lower
+
+    return juce::CharacterFunctions::toUpperCase (c);
+}
+
+inline juce::String upperCased (const juce::String& text)
+{
+    juce::String result;
+    result.preallocateBytes (text.getNumBytesAsUTF8());
+
+    for (auto t = text.getCharPointer(); ! t.isEmpty();)
+    {
+        const auto c = t.getAndAdvance();
+
+        if (c == 0x00df)  // ß -> SS
+            result << "SS";
+        else
+            result << juce::String::charToString (upperCased (c));
+    }
+
+    return result;
+}
+
 // --- shared bench controls ------------------------------------------------
 // Drawn rather than built from child components, so they follow live
 // theme/accent changes and can be hit-tested by whichever view hosts them.
