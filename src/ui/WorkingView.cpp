@@ -10,21 +10,43 @@ namespace
     constexpr int tableWidth = 196;
     constexpr int padX = 16, padY = 14, gap = 14;
 
+    constexpr int headerHeight = 24;
+    constexpr int maxSourceRowHeight = 36;
+
+    // 8px padding, label row 13, 6 gap, bar, 6 gap, caption 11, 8px padding
+    constexpr int footerBlockHeight = 8 + 13 + 6 + MatrixBar::barHeight + 6 + 11 + 8;
+
     struct SourceRow
     {
-        const char* name;
-        int peakIndex; // into snapshot.sourcePeaksDb (drums,bass,other,vocals)
-        const char* role;
+        juce::String name;
+        int peakIndex; // into snapshot.sourcePeaksDb (demucs source order)
+        juce::String role;
     };
 
-    // Design order: vocals first. Since the 5-stem update every source is its
-    // own stem; drums/bass/other are additionally summed into the instrumental.
-    constexpr SourceRow sourceRows[] = {
-        { "vocals", 3, "stem 1" },
-        { "drums", 0, "stem 2 \xc2\xb7 +instrumental" },
-        { "bass", 1, "stem 3 \xc2\xb7 +instrumental" },
-        { "other", 2, "stem 4 \xc2\xb7 +instrumental" },
-    };
+    // Design order: vocals first, then the stem display order. Every source is
+    // its own stem; everything but the voice is additionally summed into the
+    // instrumental — four rows in the 4-source modes, six with htdemucs_6s.
+    std::vector<SourceRow> sourceRowsFor (Quality quality)
+    {
+        std::vector<SourceRow> rows;
+
+        for (auto kind : stemOrderFor (quality))
+        {
+            if (kind == stemInstrumental)
+                continue; // summed, not separated
+
+            const auto position = (int) rows.size() + 1;
+            auto role = "stem " + juce::String (position);
+
+            if (kind != stemVocals)
+                role += juce::String::fromUTF8 (" \xc2\xb7 +instrumental");
+
+            rows.push_back ({ juce::String (stemName (kind)).toLowerCase(),
+                              sourceForStemKind (kind), role });
+        }
+
+        return rows;
+    }
 } // namespace
 
 WorkingView::WorkingView()
@@ -44,7 +66,6 @@ void WorkingView::resized()
 {
     auto table = getLocalBounds().reduced (padX, padY).removeFromRight (tableWidth);
 
-    // footer block: 8px padding, label row 13, 6 gap, bar 20, 6 gap, caption 11
     const auto barY = table.getBottom() - 8 - 11 - 6 - MatrixBar::barHeight;
     bar.setBounds (table.getX() + 8, barY, table.getWidth() - 16, MatrixBar::barHeight);
 }
@@ -160,7 +181,7 @@ void WorkingView::paint (juce::Graphics& g)
 
     auto rows = table.reduced (1);
 
-    auto header = rows.removeFromTop (24);
+    auto header = rows.removeFromTop (headerHeight);
     g.setColour (theme::lineStrong);
     g.fillRect (header.getX(), header.getBottom() - 1, header.getWidth(), 1);
     g.setColour (theme::text50);
@@ -168,14 +189,23 @@ void WorkingView::paint (juce::Graphics& g)
     g.drawText ("SOURCE", header.reduced (8, 0), juce::Justification::centredLeft);
     g.drawText ("PEAK", header.reduced (8, 0), juce::Justification::centredRight);
 
+    // Six sources only fit above the footer block by tightening the rows; four
+    // keep the design's 36px.
+    const auto sourceRows = sourceRowsFor (snap.quality);
+    const auto numSourceRows = (int) sourceRows.size();
+    const auto available = rows.getHeight() - footerBlockHeight - 6;
+    const auto sourceRowHeight = juce::jlimit (24, maxSourceRowHeight,
+                                               available / juce::jmax (1, numSourceRows));
+    const auto rowPadY = sourceRowHeight >= maxSourceRowHeight ? 7 : 5;
+
     for (const auto& row : sourceRows)
     {
-        auto r = rows.removeFromTop (36);
+        auto r = rows.removeFromTop (sourceRowHeight);
 
         g.setColour (theme::lineSoft10);
         g.fillRect (r.getX(), r.getBottom() - 1, r.getWidth(), 1);
 
-        auto inner = r.reduced (8, 7);
+        auto inner = r.reduced (8, rowPadY);
         auto nameLine = inner.removeFromTop (12);
 
         g.setFont (theme::mono (10.0f));
@@ -184,6 +214,8 @@ void WorkingView::paint (juce::Graphics& g)
 
         g.setColour (theme::text55);
         const auto peak = snap.peaksKnown
+                                  && juce::isPositiveAndBelow (row.peakIndex,
+                                                               (int) snap.sourcePeaksDb.size())
                               ? juce::String (snap.sourcePeaksDb[(size_t) row.peakIndex], 1) + " dB"
                               : juce::String::fromUTF8 ("\xe2\x80\x94");
         g.drawText (peak, nameLine, juce::Justification::centredRight);
@@ -191,12 +223,11 @@ void WorkingView::paint (juce::Graphics& g)
         inner.removeFromTop (2);
         g.setFont (theme::mono (8.0f, 0.08f));
         g.setColour (theme::text40);
-        g.drawText (juce::String::fromUTF8 (row.role), inner, juce::Justification::centredLeft);
+        g.drawText (row.role, inner, juce::Justification::centredLeft);
     }
 
     // footer block
-    auto footer = table.reduced (1).removeFromBottom (8 + 13 + 6 + MatrixBar::barHeight + 6 + 11 + 8)
-                      .reduced (8, 8);
+    auto footer = table.reduced (1).removeFromBottom (footerBlockHeight).reduced (8, 8);
 
     auto labelRow = footer.removeFromTop (13);
     g.setFont (theme::mono (9.0f, 0.08f));

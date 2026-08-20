@@ -1,13 +1,12 @@
 #pragma once
 
 #include <juce_audio_formats/juce_audio_formats.h>
-#include <array>
 #include <vector>
 
 #include "Phase.h"
 #include "AudioFileIO.h"
 #include "ModelManager.h"
-#include "StemCache.h" // StemIndex / numStems
+#include "StemCache.h" // StemIndex / stemOrderFor
 
 namespace splittr
 {
@@ -29,14 +28,20 @@ struct EngineSnapshot
 
     struct StemInfo
     {
+        int kind = stemVocals;       // StemIndex
+        juce::String name;           // "Vocals", … — the name it was rendered under
         juce::File wav;
         std::vector<float> waveform; // 70 columns
         float peakDb = -120.0f;
     };
 
-    std::array<StemInfo, numStems> stems; // StemIndex order
+    // Display order for the mode that produced them: five stems for the
+    // 4-source modes, seven for 6-stem. Empty until a run completes.
+    std::vector<StemInfo> stems;
 
-    std::array<float, 4> sourcePeaksDb { -120.f, -120.f, -120.f, -120.f }; // drums,bass,other,vocals
+    // demucs source order (drums, bass, other, vocals[, guitar, piano]) — the
+    // working view's source table reads it positionally.
+    std::vector<float> sourcePeaksDb;
     bool peaksKnown = false;
 
     int segment = 0, segmentCount = 0;
@@ -72,6 +77,11 @@ public:
     void setQuality (Quality);                    // FAST / BEST toggle
 
     EngineSnapshot getSnapshot() const;
+
+    // True when this file, in the current mode, would republish from cache
+    // instantly — i.e. accepting it costs no work. The editor uses it to decide
+    // whether the drop needs confirming.
+    bool hasCachedResult (const juce::File&) const;
 
     // Persistence (processor state chunk)
     juce::String sourcePathForState() const;

@@ -89,9 +89,10 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
 
     doneView.onReveal = [&engine]
     {
-        const auto file = engine.getSnapshot().stems[splittr::stemVocals].wav;
-        if (file.existsAsFile())
-            file.revealToUser();
+        const auto stems = engine.getSnapshot().stems;
+
+        if (! stems.empty() && stems.front().wav.existsAsFile())
+            stems.front().wav.revealToUser();
     };
 
     doneView.onExport = [this] { exportStems(); };
@@ -112,24 +113,19 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
 
     doneView.onPlayToggle = [this] { splittrProcessor.getAudition().togglePlay (stemFiles()); };
 
-    for (int i = 0; i < splittr::numStems; ++i)
+    doneView.onMuteToggle = [&audition] (int stem) { audition.setMuted (stem, ! audition.isMuted (stem)); };
+
+    // Seeking is how you audition a spot, so a click on a cold transport
+    // starts the shared playback rather than silently moving the playhead.
+    doneView.onSeek = [this] (int, double f)
     {
-        auto& row = doneView.row (i);
+        auto& player = splittrProcessor.getAudition();
 
-        row.onMuteToggle = [&audition, i] { audition.setMuted (i, ! audition.isMuted (i)); };
+        if (! player.isLoaded())
+            player.play (stemFiles());
 
-        // Seeking is how you audition a spot, so a click on a cold transport
-        // starts the shared playback rather than silently moving the playhead.
-        row.onSeek = [this] (double f)
-        {
-            auto& player = splittrProcessor.getAudition();
-
-            if (! player.isLoaded())
-                player.play (stemFiles());
-
-            player.seekFraction (f);
-        };
-    }
+        player.seekFraction (f);
+    };
 
     setResizable (true, true); // native window edges + bottom-right corner grip
     getConstrainer()->setFixedAspectRatio ((double) theme::editorWidth / (double) theme::editorHeight);
@@ -212,7 +208,7 @@ void SplittrAudioProcessorEditor::requestSeparationFor (const juce::File& file)
 
     // A cache hit republishes instantly without discarding any work, so it
     // never needs confirming.
-    const bool cached = splittr::StemCache::entryFor (file, snap.quality).complete();
+    const bool cached = splittrProcessor.getEngine().hasCachedResult (file);
 
     if (workToLose && ! cached)
     {
@@ -288,14 +284,10 @@ void SplittrAudioProcessorEditor::exportStems()
 
                               const auto base = snap.sourceFile.getFileNameWithoutExtension();
 
-                              for (int i = 0; i < splittr::numStems; ++i)
-                              {
-                                  const auto& wav = snap.stems[(size_t) i].wav;
-
-                                  if (wav.existsAsFile())
-                                      wav.copyFileTo (dir.getChildFile (
-                                          base + " - " + splittr::stemName (i) + ".wav"));
-                              }
+                              for (const auto& stem : snap.stems)
+                                  if (stem.wav.existsAsFile())
+                                      stem.wav.copyFileTo (dir.getChildFile (
+                                          base + " - " + stem.name + ".wav"));
 
                               dir.revealToUser(); // confirmation: show the result in Finder
                           });
@@ -307,8 +299,8 @@ splittr::AuditionPlayer::StemFiles SplittrAudioProcessorEditor::stemFiles() cons
 
     splittr::AuditionPlayer::StemFiles files;
 
-    for (int i = 0; i < splittr::numStems; ++i)
-        files[(size_t) i] = snap.stems[(size_t) i].wav;
+    for (const auto& stem : snap.stems)
+        files.push_back (stem.wav);
 
     return files;
 }
@@ -329,6 +321,7 @@ void SplittrAudioProcessorEditor::browseForModelFile()
 
 // Dev harness: SPLITTR_UI_PREVIEW=firstrun|working|done renders that state
 // with synthetic data for side-by-side comparison against the design mock.
+// It stays on the 4-source stem set — the mock's five rows.
 static bool applyUiPreview (splittr::EngineSnapshot& s, double clock)
 {
     static const auto mode = juce::SystemStats::getEnvironmentVariable ("SPLITTR_UI_PREVIEW", {});
@@ -351,15 +344,35 @@ static bool applyUiPreview (splittr::EngineSnapshot& s, double clock)
     s.sourceDuration = 228.0;
     s.sourceWaveform = fakeWave (60, 1.0f);
 
-    static const float previewPeaks[splittr::numStems] = { -6.2f, -9.8f, -11.4f, -7.9f, -4.1f };
+    // Peaks by stem kind, so both the five- and seven-row sets read plausibly.
+    static const float previewPeaks[splittr::numStemKinds] = {
+        -6.2f,  // vocals
+        -9.8f,  // drums
+        -11.4f, // bass
+        -14.2f, // guitar
+        -16.5f, // piano
+        -7.9f,  // other
+        -4.1f   // instrumental
+    };
 
-    for (int i = 0; i < splittr::numStems; ++i)
+    const auto& previewOrder = splittr::stemOrderFor (s.quality);
+    s.stems.clear();
+
+    for (int i = 0; i < (int) previewOrder.size(); ++i)
     {
-        s.stems[(size_t) i].waveform = fakeWave (70, 2.0f + (float) i);
-        s.stems[(size_t) i].peakDb = previewPeaks[i];
+        splittr::EngineSnapshot::StemInfo stem;
+        stem.kind = previewOrder[(size_t) i];
+        stem.name = splittr::stemName (stem.kind);
+        stem.waveform = fakeWave (70, 2.0f + (float) i);
+        stem.peakDb = previewPeaks[stem.kind];
+        s.stems.push_back (std::move (stem));
     }
 
-    s.sourcePeaksDb = { -9.8f, -11.4f, -7.9f, -6.2f };
+    // demucs source order: drums, bass, other, vocals, guitar, piano
+    static const float previewSourcePeaks[] = { -9.8f, -11.4f, -7.9f, -6.2f, -14.2f, -16.5f };
+
+    s.sourcePeaksDb.assign (previewSourcePeaks,
+                            previewSourcePeaks + splittr::sourceCountFor (s.quality));
     s.bpm = 124.0;
     s.key = "F# MIN";
     s.progress = p;
@@ -412,12 +425,15 @@ void SplittrAudioProcessorEditor::timerCallback()
         case Phase::Decoding:
         case Phase::Separating:
         case Phase::Rendering:
-            meta = snap.quality == splittr::Quality::best
-                       ? juce::String::fromUTF8 ("4-SOURCE ANALYSIS \xc2\xb7 FINE-TUNED")
-                       : juce::String ("4-SOURCE ANALYSIS");
+            meta = juce::String (splittr::sourceCountFor (snap.quality)) + "-SOURCE ANALYSIS";
+
+            if (snap.quality == splittr::Quality::best)
+                meta += juce::String::fromUTF8 (" \xc2\xb7 FINE-TUNED");
+
             break;
         case Phase::Ready:
-            meta = juce::String::fromUTF8 ("OUTPUT 5 \xc3\x97 WAV \xc2\xb7 32-BIT FLOAT \xc2\xb7 44.1 kHz");
+            meta = "OUTPUT " + juce::String (snap.stems.size())
+                   + juce::String::fromUTF8 (" \xc3\x97 WAV \xc2\xb7 32-BIT FLOAT \xc2\xb7 44.1 kHz");
             break;
         case Phase::Error: meta = snap.message; break;
         case Phase::Idle: break;
@@ -474,12 +490,12 @@ void SplittrAudioProcessorEditor::timerCallback()
             pos = snap.progress * len;
         }
 
-        doneView.update (snap, playing);
+        doneView.update (snap, playing); // rebuilds the rows when the stem set changes
 
-        for (int i = 0; i < splittr::numStems; ++i)
+        for (int i = 0; i < juce::jmin ((int) snap.stems.size(), doneView.numRows()); ++i)
         {
             const auto& stem = snap.stems[(size_t) i];
-            const auto muted = preview ? i == splittr::stemBass : audition.isMuted (i);
+            const auto muted = preview ? stem.kind == splittr::stemBass : audition.isMuted (i);
 
             doneView.row (i).update (stem.wav, stem.waveform, stem.peakDb,
                                      muted, playing, pos, len, animationClock);

@@ -8,7 +8,9 @@ namespace splittr
 {
 
 // Working state: ruled source waveform with sweeping HEAD playhead on the
-// left, fixed 196px four-source table with a small matrix bar on the right.
+// left, fixed 196px source table with a small matrix bar on the right. The
+// table lists four sources in the 4-source modes and six with htdemucs_6s,
+// tightening its rows to fit.
 class WorkingView : public juce::Component
 {
 public:

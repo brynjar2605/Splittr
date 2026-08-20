@@ -3,9 +3,10 @@
 //   splittr_cli <audio-in> <model.bin> <out-dir>
 //   splittr_cli --analyze <audio-in> [<audio-in> ...]
 //
-// Separation mode writes Vocals.wav and Instrumental.wav (32-bit float,
-// 44.1 kHz) to out-dir. Analyse mode prints tempo/key/confidence per file —
-// the validation harness for TrackAnalyzer.
+// Separation mode writes every stem the model produces (32-bit float, 44.1 kHz)
+// to out-dir: five files for a 4-source model, seven for htdemucs_6s (guitar
+// and piano join). Analyse mode prints tempo/key/confidence per file — the
+// validation harness for TrackAnalyzer.
 
 #include "engine/AudioFileIO.h"
 #include "engine/DemucsSeparator.h"
@@ -122,24 +123,25 @@ int main (int argc, char** argv)
     std::cout << "Inference: " << juce::String (inferenceSeconds, 1) << " s ("
               << juce::String (decoded.durationSeconds / inferenceSeconds, 2) << "x realtime)\n";
 
-    static const char* sourceNames[] = { "drums", "bass", "other", "vocals" };
+    std::cout << "Sources: " << result.numSources << "\n";
 
-    for (int s = 0; s < 4; ++s)
-        std::cout << "Peak " << sourceNames[s] << ": "
-                  << juce::String (result.sourcePeaksDb[(size_t) s], 1) << " dB\n";
+    outDir.createDirectory();
 
-    const auto vocalsFile = outDir.getChildFile ("Vocals.wav");
-    const auto instrumentalFile = outDir.getChildFile ("Instrumental.wav");
-
-    if (! io.writeWavFloat32 (vocalsFile, result.vocals, splittr::AudioFileIO::kTargetSampleRate, error)
-        || ! io.writeWavFloat32 (instrumentalFile, result.instrumental, splittr::AudioFileIO::kTargetSampleRate, error))
+    for (size_t i = 0; i < result.stems.size(); ++i)
     {
-        std::cerr << error << "\n";
-        return 1;
-    }
+        const auto name = juce::String (splittr::stemName (result.kinds[i]));
+        const auto file = outDir.getChildFile (name + ".wav");
 
-    std::cout << "Wrote " << vocalsFile.getFullPathName() << "\n";
-    std::cout << "Wrote " << instrumentalFile.getFullPathName() << "\n";
+        if (! io.writeWavFloat32 (file, result.stems[i],
+                                  splittr::AudioFileIO::kTargetSampleRate, error))
+        {
+            std::cerr << error << "\n";
+            return 1;
+        }
+
+        std::cout << "Wrote " << file.getFullPathName() << " (peak "
+                  << juce::String (result.peaksDb[i], 1) << " dB)\n";
+    }
 
     return 0;
 }

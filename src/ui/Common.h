@@ -25,33 +25,61 @@ inline juce::String mmss (double seconds)
 
 constexpr int switchHeight = 22;
 
-// Segmented switch: draws [a|b] at (x, y) and returns the bounds of both
-// cells. `hovered` is the host's current hover id, compared against
-// hoverIdA/hoverIdB for the dimmed-to-bright roll.
+// Segmented switch of any width: draws [a|b|…] at (x, y) and returns one
+// bounds per cell. Cell n answers to hover id hoverIdBase + n against the
+// host's current `hovered` id for the dimmed-to-bright roll.
+inline std::vector<juce::Rectangle<int>>
+drawSwitchCells (juce::Graphics& g, int x, int y, const juce::StringArray& labels,
+                 int activeIndex, int hovered, int hoverIdBase, int cellWidth)
+{
+    std::vector<juce::Rectangle<int>> cells;
+
+    for (int i = 0; i < labels.size(); ++i)
+        cells.emplace_back (x + i * cellWidth, y, cellWidth, switchHeight);
+
+    if (juce::isPositiveAndBelow (activeIndex, labels.size()))
+    {
+        g.setColour (theme::accentTint15);
+        g.fillRect (cells[(size_t) activeIndex]);
+    }
+
+    g.setColour (theme::lineStrong);
+    g.drawRect (juce::Rectangle<int> (x, y, cellWidth * labels.size(), switchHeight), 1);
+
+    for (int i = 1; i < labels.size(); ++i)
+        g.fillRect (x + i * cellWidth, y + 1, 1, switchHeight - 2); // dividers
+
+    g.setFont (theme::mono (9.5f, 0.1f));
+
+    for (int i = 0; i < labels.size(); ++i)
+    {
+        g.setColour (i == activeIndex ? theme::accentSoft
+                                      : (hovered == hoverIdBase + i ? theme::text60 : theme::text40));
+        g.drawText (labels[i], cells[(size_t) i], juce::Justification::centred);
+    }
+
+    return cells;
+}
+
+// Index of the cell containing p, or -1.
+inline int cellAt (const std::vector<juce::Rectangle<int>>& cells, juce::Point<int> p)
+{
+    for (size_t i = 0; i < cells.size(); ++i)
+        if (cells[i].contains (p))
+            return (int) i;
+
+    return -1;
+}
+
+// Two-cell convenience used by the THEME switch.
 inline std::pair<juce::Rectangle<int>, juce::Rectangle<int>>
 drawSwitch (juce::Graphics& g, int x, int y, const juce::String& a, const juce::String& b,
             bool bActive, int hovered, int hoverIdA, int hoverIdB, int cellWidth)
 {
-    const juce::Rectangle<int> aBounds (x, y, cellWidth, switchHeight);
-    const juce::Rectangle<int> bBounds (x + cellWidth, y, cellWidth, switchHeight);
-
-    g.setColour (theme::accentTint15);
-    g.fillRect (bActive ? bBounds : aBounds);
-
-    g.setColour (theme::lineStrong);
-    g.drawRect (juce::Rectangle<int> (x, y, cellWidth * 2, switchHeight), 1);
-    g.fillRect (x + cellWidth, y + 1, 1, switchHeight - 2); // divider
-
-    g.setFont (theme::mono (9.5f, 0.1f));
-    g.setColour (! bActive ? theme::accentSoft
-                           : (hovered == hoverIdA ? theme::text60 : theme::text40));
-    g.drawText (a, aBounds, juce::Justification::centred);
-
-    g.setColour (bActive ? theme::accentSoft
-                         : (hovered == hoverIdB ? theme::text60 : theme::text40));
-    g.drawText (b, bBounds, juce::Justification::centred);
-
-    return { aBounds, bBounds };
+    juce::ignoreUnused (hoverIdB);
+    const auto cells = drawSwitchCells (g, x, y, { a, b }, bActive ? 1 : 0,
+                                        hovered, hoverIdA, cellWidth);
+    return { cells[0], cells[1] };
 }
 
 // Full-spectrum accent picker: 1px hue columns, hairline frame, marker at the

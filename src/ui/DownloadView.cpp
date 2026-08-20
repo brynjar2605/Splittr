@@ -35,10 +35,8 @@ void DownloadView::update (double clockSeconds, const EngineSnapshot& s)
         primaryButton.setLabel (downloading ? "CANCEL" : "DOWNLOAD");
     }
 
-    const auto numModels = (int) ModelManager::filenamesFor (s.quality).size();
-    const auto totalBytes = s.downloadTotal > 0
-                                ? s.downloadTotal
-                                : (juce::int64) numModels * ModelManager::bytesPerModel;
+    const auto totalBytes = s.downloadTotal > 0 ? s.downloadTotal
+                                                : ModelManager::expectedBytesFor (s.quality);
 
     if (downloading)
     {
@@ -54,9 +52,23 @@ void DownloadView::update (double clockSeconds, const EngineSnapshot& s)
         captionLeft = message.isNotEmpty() ? message : juce::String ("waiting to download");
     }
 
-    copyLine = s.quality == Quality::best
-                   ? juce::String::fromUTF8 ("htdemucs fine-tuned \xe2\x80\x94 4 models \xc3\x97 84 MB \xe2\x80\x94 one time only.")
-                   : juce::String::fromUTF8 ("ggml-htdemucs-4s-f16.bin \xe2\x80\x94 84 MB \xe2\x80\x94 one time only.");
+    switch (s.quality)
+    {
+        case Quality::best:
+            copyLine = juce::String::fromUTF8 (
+                "htdemucs fine-tuned \xe2\x80\x94 4 models \xc3\x97 84 MB \xe2\x80\x94 one time only.");
+            break;
+
+        case Quality::sixStem:
+            copyLine = juce::String::fromUTF8 (
+                "ggml-htdemucs-6s-f16.bin \xe2\x80\x94 55 MB \xe2\x80\x94 one time only.");
+            break;
+
+        case Quality::fast:
+            copyLine = juce::String::fromUTF8 (
+                "ggml-htdemucs-4s-f16.bin \xe2\x80\x94 84 MB \xe2\x80\x94 one time only.");
+            break;
+    }
 
     if (message != s.message)
     {

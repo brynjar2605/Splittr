@@ -48,19 +48,31 @@ void IdleDropView::setQuality (Quality q)
 
 void IdleDropView::paint (juce::Graphics& g)
 {
-    // --- ENGINE toggle row above the drop panel ---
+    // --- ENGINE mode row above the drop panel ---
     {
         const auto x = ui::drawFieldLabel (g, "ENGINE", padX, topRowY);
 
-        std::tie (fastBounds, bestBounds) =
-            ui::drawSwitch (g, x, topRowY, "FAST", "BEST", quality == Quality::best,
-                            hoveredOption, 1, 2, 54);
+        const auto active = quality == Quality::fast ? 0 : quality == Quality::best ? 1 : 2;
+
+        engineBounds = ui::drawSwitchCells (g, x, topRowY, { "FAST", "BEST", "6-STEM" },
+                                            active, hoveredOption, engineHoverBase, 54);
+
+        const auto caption = [&]
+        {
+            if (quality == Quality::best)
+                return juce::String::fromUTF8 ("fine-tuned \xc3\x97 4 \xc2\xb7 best quality \xc2\xb7 ~4\xc3\x97 slower");
+
+            if (quality == Quality::sixStem)
+                // Upstream SDR scores guitar and piano well below the four
+                // standard sources; say so up front.
+                return juce::String::fromUTF8 ("htdemucs_6s \xc2\xb7 guitar + piano are weaker than the 4 core stems");
+
+            return juce::String::fromUTF8 ("htdemucs \xc2\xb7 about realtime");
+        }();
 
         g.setFont (theme::mono (8.0f, 0.08f));
         g.setColour (theme::text35);
-        g.drawText (quality == Quality::fast
-                        ? juce::String::fromUTF8 ("htdemucs \xc2\xb7 about realtime")
-                        : juce::String::fromUTF8 ("fine-tuned \xc3\x97 4 \xc2\xb7 best quality \xc2\xb7 ~4\xc3\x97 slower"),
+        g.drawText (caption,
                     juce::Rectangle<int> (0, topRowY, getWidth() - padX, ui::switchHeight),
                     juce::Justification::centredRight);
     }
@@ -114,17 +126,19 @@ void IdleDropView::paint (juce::Graphics& g)
     // --- LIBRARY: everything ever split, straight out of the stem cache ---
     libraryBounds = ui::drawTextAction (g, "LIBRARY", padX,
                                         getHeight() - bottomRowInset - bottomRowHeight,
-                                        bottomRowHeight, hoveredOption == 3);
+                                        bottomRowHeight, hoveredOption == libraryHoverId);
 }
 
 void IdleDropView::mouseUp (const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
 
-    if (fastBounds.contains (p) || bestBounds.contains (p))
+    if (const auto cell = ui::cellAt (engineBounds, p); cell >= 0)
     {
+        static const Quality qualities[] = { Quality::fast, Quality::best, Quality::sixStem };
+
         if (onQualityChange != nullptr)
-            onQualityChange (fastBounds.contains (p) ? Quality::fast : Quality::best);
+            onQualityChange (qualities[cell]);
 
         return;
     }
@@ -145,10 +159,13 @@ void IdleDropView::mouseMove (const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
 
-    const auto option = fastBounds.contains (p)      ? 1
-                        : bestBounds.contains (p)    ? 2
-                        : libraryBounds.contains (p) ? 3
-                                                     : 0;
+    auto option = 0;
+
+    if (const auto cell = ui::cellAt (engineBounds, p); cell >= 0)
+        option = engineHoverBase + cell;
+    else if (libraryBounds.contains (p))
+        option = libraryHoverId;
+
     if (option != hoveredOption)
     {
         hoveredOption = option;
