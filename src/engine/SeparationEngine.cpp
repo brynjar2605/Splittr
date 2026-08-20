@@ -29,7 +29,48 @@ namespace
     // Bumped to 4 when the stem set became variable: an entry now records the
     // stems it holds, so it can be reopened without consulting the current
     // engine mode. (3: normalised, sqrt-mapped waveform columns.)
+    //
+    // Deliberately NOT bumped for the export naming (issue #11): the filenames
+    // are an extra attribute, and a v4 entry without it holds exactly the
+    // <Name>.wav layout entryIn falls back to. Bumping would re-separate every
+    // cached song to gain nothing.
     constexpr int metaVersion = 4;
+
+    // The names the entry's stems actually live under, parallel to "stems".
+    // Absent before the export pattern existed; entryIn then falls back.
+    //
+    // Comma-joined like "stems": stemFileName runs the one free-form part (the
+    // song title) through createLegalFileName, which strips commas.
+    juce::StringArray stemFilesFrom (const juce::XmlElement& xml)
+    {
+        return juce::StringArray::fromTokens (xml.getStringAttribute ("stemFiles"), ",", {});
+    }
+
+    // What travels inside the file as well as in its name. LIST/INFO only:
+    // an 'acid' chunk would carry the tempo too, but it also marks the file as
+    // a loop, and a DAW that reads it would warp a whole stem to the project
+    // tempo on import.
+    juce::StringPairArray stemMetadata (const juce::String& songName,
+                                        const juce::String& stem,
+                                        double bpm, const juce::String& key)
+    {
+        juce::StringPairArray values;
+        values.set (juce::WavAudioFormat::riffInfoTitle, songName + " - " + stem);
+        values.set (juce::WavAudioFormat::riffInfoSoftware, "Splittr");
+
+        juce::StringArray found;
+
+        if (bpm > 0.0)
+            found.add (juce::String (juce::roundToInt (bpm)) + " BPM");
+
+        if (key.isNotEmpty())
+            found.add (key);
+
+        if (! found.isEmpty())
+            values.set (juce::WavAudioFormat::riffInfoKeywords, found.joinIntoString (", "));
+
+        return values;
+    }
 
     // An entry is usable only when its meta is the current version and every
     // stem it names is still on disk. On success `entry` is re-pointed at the
@@ -54,7 +95,7 @@ namespace
         if (stemNames.isEmpty())
             return nullptr;
 
-        entry = StemCache::entryIn (entry.dir, stemNames);
+        entry = StemCache::entryIn (entry.dir, stemNames, stemFilesFrom (*xml));
 
         return entry.complete() ? std::move (xml) : nullptr;
     }
@@ -324,7 +365,22 @@ public:
             s.progress = 0.95f;
         });
 
-        auto entry = StemCache::entryFor (source, quality);
+        // Stems leave the plugin by being dragged straight out of the cache, so
+        // they are written under their export name from the start rather than
+        // copied to a named twin later — that would double the disk for nothing
+        // (issue #11). The canonical names stay in the meta as the identity the
+        // UI and the per-stem attributes are keyed on.
+        const auto songName = source.getFileNameWithoutExtension();
+
+        juce::StringArray stemNames, stemFiles;
+
+        for (auto kind : result.kinds)
+        {
+            stemNames.add (stemName (kind));
+            stemFiles.add (stemFileName (songName, stemName (kind), analysis.bpm, analysis.key));
+        }
+
+        auto entry = StemCache::entryIn (StemCache::dirFor (source, quality), stemNames, stemFiles);
         entry.dir.createDirectory();
 
         const auto numStems = (int) result.stems.size();
@@ -336,7 +392,9 @@ public:
         for (int i = 0; i < numStems; ++i)
         {
             if (! engine.io.writeWavFloat32 (entry.stems[(size_t) i], result.stems[(size_t) i],
-                                             AudioFileIO::kTargetSampleRate, error))
+                                             AudioFileIO::kTargetSampleRate, error,
+                                             stemMetadata (songName, stemNames[i],
+                                                           analysis.bpm, analysis.key)))
             {
                 entry.dir.deleteRecursively();
                 return fail ("COULD NOT WRITE STEMS");
@@ -347,15 +405,12 @@ public:
 
         const auto rtFactor = inferenceSeconds > 0 ? duration / inferenceSeconds : 0.0;
 
-        juce::StringArray stemNames;
-        for (auto kind : result.kinds)
-            stemNames.add (stemName (kind));
-
         juce::XmlElement meta ("SplittrStems");
         meta.setAttribute ("version", metaVersion);
         meta.setAttribute ("sourcePath", source.getFullPathName());
         meta.setAttribute ("quality", ModelManager::qualityToken (quality));
         meta.setAttribute ("stems", stemNames.joinIntoString (","));
+        meta.setAttribute ("stemFiles", stemFiles.joinIntoString (","));
         meta.setAttribute ("duration", duration);
         meta.setAttribute ("inferenceSeconds", inferenceSeconds);
         meta.setAttribute ("realtimeFactor", rtFactor);
@@ -600,7 +655,7 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
     if (stemNames.isEmpty())
         stemNames = { "Vocals", "Drums", "Bass", "Other", "Instrumental" };
 
-    const auto entry = StemCache::entryIn (cacheDir, stemNames);
+    const auto entry = StemCache::entryIn (cacheDir, stemNames, stemFilesFrom (*xml));
 
     auto found = 0;
     for (const auto& wav : entry.stems)

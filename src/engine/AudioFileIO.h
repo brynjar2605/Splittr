@@ -20,10 +20,14 @@ public:
 
     bool decodeToStereo44k (const juce::File& file, DecodedAudio& out, juce::String& error);
 
+    // `metadata` is keyed on juce::WavAudioFormat's property names; whatever
+    // the format recognises lands in the corresponding chunk (LIST/INFO for
+    // the riffInfo* keys) and the rest is ignored.
     bool writeWavFloat32 (const juce::File& file,
                           const juce::AudioBuffer<float>& buffer,
                           double sampleRate,
-                          juce::String& error);
+                          juce::String& error,
+                          const juce::StringPairArray& metadata = {});
 
     // Downsampled waveform columns, 0..1 — for the UI waveforms. Per column
     // RMS, normalised to the buffer's loudest column and sqrt-mapped so loud
