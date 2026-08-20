@@ -9,11 +9,26 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_subdirectory(third_party/JUCE)
 include(cmake/DemucsCpp.cmake)
+include(cmake/BasicPitch.cmake)
 
 # --- Bundled assets (fonts) ---
 juce_add_binary_data(SplittrAssets SOURCES
     assets/fonts/DMMono-Regular.ttf
     assets/fonts/DMMono-Medium.ttf)
+
+# --- Basic Pitch weights (~790 KB, Apache-2.0; see third_party/basicpitch) ---
+# Small enough to live in the binary rather than go through ModelManager's
+# download path, so MIDI extraction works on a fresh install with no network.
+# Own namespace/header: two binary-data targets cannot both be BinaryData.h.
+juce_add_binary_data(SplittrModels
+    NAMESPACE BasicPitchWeights
+    HEADER_NAME BasicPitchWeights.h
+    SOURCES
+        third_party/basicpitch/weights/cqt_kernels.bin
+        third_party/basicpitch/weights/cnn_contour_model.json
+        third_party/basicpitch/weights/cnn_note_model.json
+        third_party/basicpitch/weights/cnn_onset_1_model.json
+        third_party/basicpitch/weights/cnn_onset_2_model.json)
 
 # --- The plugin ---
 juce_add_plugin(Splittr
@@ -47,6 +62,7 @@ target_sources(Splittr PRIVATE
     src/ui/LibraryView.cpp
     src/engine/AudioFileIO.cpp
     src/engine/DemucsSeparator.cpp
+    src/engine/MidiTranscriber.cpp
     src/engine/SeparationEngine.cpp
     src/engine/ModelManager.cpp
     src/engine/StemCache.cpp
@@ -63,6 +79,8 @@ target_compile_definitions(Splittr PUBLIC
 
 target_link_libraries(Splittr PRIVATE
     SplittrAssets
+    SplittrModels
+    basicpitch
     demucs_cpp
     juce::juce_audio_utils
     juce::juce_audio_formats
@@ -102,6 +120,7 @@ target_sources(splittr_cli PRIVATE
     tools/splittr_cli/main.cpp
     src/engine/AudioFileIO.cpp
     src/engine/DemucsSeparator.cpp
+    src/engine/MidiTranscriber.cpp
     src/engine/TrackAnalyzer.cpp)
 
 target_include_directories(splittr_cli PRIVATE src)
@@ -111,6 +130,8 @@ target_compile_definitions(splittr_cli PRIVATE
     JUCE_USE_CURL=0)
 
 target_link_libraries(splittr_cli PRIVATE
+    SplittrModels
+    basicpitch
     demucs_cpp
     juce::juce_audio_formats
     juce::juce_dsp
