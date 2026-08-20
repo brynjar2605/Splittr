@@ -49,7 +49,12 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     // Settings is reachable from every state — the header is always up.
     headerBar.onSettings = [this]
     {
-        showLibrary = false;
+        if (showLibrary)
+        {
+            showLibrary = false;
+            idleView.refreshLibraryCount(); // same stale-count risk as onClose
+        }
+
         showSettings = ! showSettings;
     };
 
@@ -73,7 +78,13 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         repaint();
     };
 
-    libraryView.onClose = [this] { showLibrary = false; };
+    // Closing the overlay re-counts the LIBRARY tag: deletes in there happen
+    // while the idle view sits visible underneath, so it never re-enters.
+    libraryView.onClose = [this]
+    {
+        showLibrary = false;
+        idleView.refreshLibraryCount();
+    };
 
     libraryView.onOpenEntry = [this, &engine, &audition] (juce::File cacheDir)
     {

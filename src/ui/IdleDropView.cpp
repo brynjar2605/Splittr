@@ -1,5 +1,6 @@
 #include "IdleDropView.h"
 #include "Common.h"
+#include "engine/StemCache.h"
 
 namespace splittr
 {
@@ -8,10 +9,30 @@ namespace
 {
     constexpr int padX = 16;
     constexpr int topRowY = 14;              // ENGINE row
-    constexpr int bottomRowHeight = 13;      // LIBRARY row
+    constexpr int bottomRowHeight = ui::TagButton::idealHeight; // LIBRARY row
     constexpr int bottomRowInset = 14;       // its distance from the bottom edge
+    constexpr int panelGap = 8;              // between the panel and that row
     constexpr int panelTop = 44;             // below the ENGINE row
-    constexpr int panelBottomInset = 35;     // above the LIBRARY row
+    constexpr int panelBottomInset = bottomRowInset + bottomRowHeight + panelGap;
+
+    // The count is the point of the promotion: it says there is something
+    // behind the word. An empty cache has nothing to advertise, so the tag
+    // falls back to the bare label rather than promising "· 0" — the entry
+    // point stays put, the scent only appears once there is a trail.
+    juce::String libraryLabel (int count)
+    {
+        if (count <= 0)
+            return "LIBRARY";
+
+        return juce::String::fromUTF8 ("LIBRARY \xc2\xb7 ") + juce::String (count);
+    }
+
+    // ui::drawTagAction takes a left edge, so centring one means measuring it
+    // the same way it does: label plus 12px of padding either side.
+    int tagWidth (const juce::String& label)
+    {
+        return (int) std::ceil (ui::textWidth (theme::mono (9.5f, 0.08f), label)) + 24;
+    }
 } // namespace
 
 IdleDropView::IdleDropView()
@@ -44,6 +65,25 @@ void IdleDropView::setQuality (Quality q)
         quality = q;
         repaint();
     }
+}
+
+void IdleDropView::refreshLibraryCount()
+{
+    const auto count = (int) StemCache::enumerate().size();
+
+    if (libraryCount != count)
+    {
+        libraryCount = count;
+        repaint();
+    }
+}
+
+void IdleDropView::visibilityChanged()
+{
+    // Once per entry into the idle state: a split that just finished, or the
+    // editor opening. Nothing else can add an entry while this view is up.
+    if (isVisible())
+        refreshLibraryCount();
 }
 
 void IdleDropView::paint (juce::Graphics& g)
@@ -124,9 +164,18 @@ void IdleDropView::paint (juce::Graphics& g)
     }
 
     // --- LIBRARY: everything ever split, straight out of the stem cache ---
-    libraryBounds = ui::drawTextAction (g, "LIBRARY", padX,
-                                        getHeight() - bottomRowInset - bottomRowHeight,
-                                        bottomRowHeight, hoveredOption == libraryHoverId);
+    // A hairline tag in the CLOSE/CANCEL idiom rather than a bare text action,
+    // centred under the panel so it lands in the eye path on the way down from
+    // the drop target instead of hiding in a corner. Neutral line/text55: the
+    // accent belongs to the panel, so this reads as the second way in.
+    {
+        const auto label = libraryLabel (libraryCount);
+
+        libraryBounds = ui::drawTagAction (g, label, (getWidth() - tagWidth (label)) / 2,
+                                           getHeight() - bottomRowInset - bottomRowHeight,
+                                           hoveredOption == libraryHoverId,
+                                           theme::line, theme::text55);
+    }
 }
 
 void IdleDropView::mouseUp (const juce::MouseEvent& e)

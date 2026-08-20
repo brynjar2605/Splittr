@@ -10,9 +10,9 @@ namespace splittr
 // Idle / drop-target state (borrowed from concept 2c per the handoff):
 // dashed purple panel, "drop an audio file into this window", the ENGINE
 // mode switch (FAST / BEST / 6-STEM) above it and the LIBRARY entry point
-// below. THEME/ACCENT live in the settings overlay; ENGINE stays here because
-// it is a per-song choice. Also renders the short error reason when the
-// engine is in the Error phase.
+// centred below it. THEME/ACCENT live in the settings overlay; ENGINE stays
+// here because it is a per-song choice. Also renders the short error reason
+// when the engine is in the Error phase.
 class IdleDropView : public juce::Component
 {
 public:
@@ -26,7 +26,15 @@ public:
     void setErrorMessage (const juce::String&);
     void setQuality (Quality);
 
+    // Re-count what the stem cache holds, for the number on the LIBRARY tag.
+    // A directory scan, so it is done on entering the idle state rather than
+    // in paint(); the view calls it itself (see visibilityChanged), and the
+    // editor calls it when the library overlay closes — deletes in there can
+    // stale the count while this view sits visible underneath.
+    void refreshLibraryCount();
+
     void paint (juce::Graphics&) override;
+    void visibilityChanged() override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
@@ -35,6 +43,8 @@ private:
     bool dragOver = false;
     juce::String errorMessage;
     Quality quality = Quality::fast;
+
+    int libraryCount = 0; // cached entry count behind the LIBRARY tag
 
     std::vector<juce::Rectangle<int>> engineBounds; // FAST | BEST | 6-STEM, computed in paint
     juce::Rectangle<int> libraryBounds;             //
