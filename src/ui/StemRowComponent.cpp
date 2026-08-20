@@ -1,5 +1,6 @@
 #include "StemRowComponent.h"
 #include "Common.h"
+#include "Ember.h"
 
 namespace splittr
 {
@@ -11,45 +12,64 @@ namespace
     constexpr int titleRowHeight = 16;
     constexpr int titleGap = 4;
     constexpr int scrubberWidth = 60;
-    constexpr int playSize = 16;
+    constexpr int muteSize = 16;
     constexpr int elapsedWidth = 26;
+
+    // A click is a mouse-up that never travelled this far; anything beyond is
+    // a drag, and drags belong to the external file drag-out.
+    constexpr int clickSlop = 5;
+
+    constexpr float mutedAlpha = 0.4f;
 } // namespace
 
 StemRowComponent::StemRowComponent (juce::String displayName, bool accented)
-    : name (std::move (displayName)), accent (accented)
+    : name (std::move (displayName)), accent (accented), emberRow (name.hashCode())
 {
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
 }
 
 void StemRowComponent::update (const juce::File& file, const std::vector<float>& waveform,
-                               float peak, bool isPlaying, double positionSeconds,
-                               double lengthSeconds)
+                               float peak, bool isMuted, bool isPlaying, double positionSeconds,
+                               double lengthSeconds, double emberClock)
 {
     wavFile = file;
     wave = waveform;
     peakDb = peak;
+    muted = isMuted;
     playing = isPlaying;
     position = positionSeconds;
     length = lengthSeconds;
+    clock = emberClock;
     repaint();
 }
 
-juce::Rectangle<int> StemRowComponent::playButtonBounds() const
+juce::Rectangle<int> StemRowComponent::muteButtonBounds() const
 {
     const auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, padY);
-    const auto x = body.getRight() - elapsedWidth - 8 - scrubberWidth - 8 - playSize;
-    return { x, body.getY(), playSize, playSize };
+    const auto x = body.getRight() - elapsedWidth - 8 - scrubberWidth - 8 - muteSize;
+    return { x, body.getY(), muteSize, muteSize };
 }
 
 juce::Rectangle<int> StemRowComponent::scrubberBounds() const
 {
-    const auto play = playButtonBounds();
-    return { play.getRight() + 8, play.getY(), scrubberWidth, playSize };
+    const auto mute = muteButtonBounds();
+    return { mute.getRight() + 8, mute.getY(), scrubberWidth, muteSize };
+}
+
+juce::Rectangle<int> StemRowComponent::waveformBounds() const
+{
+    auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, padY);
+    body.removeFromTop (titleRowHeight + titleGap);
+    return body;
 }
 
 void StemRowComponent::paint (juce::Graphics& g)
 {
     auto bounds = getLocalBounds();
+
+    // Muting dims the identity of the row (name + waveform) so the audible mix
+    // is readable at a glance; the transport cluster stays at full strength.
+    const auto rowAlpha = muted ? mutedAlpha : 1.0f;
 
     if (accent)
     {
@@ -84,40 +104,33 @@ void StemRowComponent::paint (juce::Graphics& g)
 
     const auto nameFont = theme::mono (10.5f, 0.1f);
 
-    g.setColour (accent ? theme::accentPale : theme::text);
+    g.setColour ((accent ? theme::accentPale : theme::text).withMultipliedAlpha (rowAlpha));
     g.setFont (nameFont);
     g.drawText (name, titleRow, juce::Justification::centredLeft);
 
     if (peakDb > -119.0f)
     {
-        g.setColour (theme::text45);
+        g.setColour (theme::text45.withMultipliedAlpha (rowAlpha));
         g.setFont (theme::mono (8.0f));
         g.drawText (juce::String (peakDb, 1) + " dB",
                     titleRow.withTrimmedLeft ((int) ui::textWidth (nameFont, name) + 10),
                     juce::Justification::centredLeft);
     }
 
-    // --- transport cluster ---
+    // --- transport cluster: mute dot + shared scrubber ---
     {
-        const auto play = playButtonBounds().toFloat();
-        const auto accentCol = accent ? theme::accentMid : theme::text50;
+        const auto mute = muteButtonBounds().toFloat();
+        const auto ringCol = muted ? theme::text35
+                                   : (accent ? theme::accentMid : theme::text50);
 
-        g.setColour (accentCol);
-        g.drawEllipse (play.reduced (0.5f), 1.0f);
+        g.setColour (ringCol);
+        g.drawEllipse (mute.reduced (0.5f), 1.0f);
 
-        g.setColour (accent ? theme::accentSoft : theme::text);
-
-        if (playing)
+        // Lit centre = audible, empty ring = muted.
+        if (! muted)
         {
-            const auto c = play.getCentre();
-            g.fillRect (c.x - 2.5f, c.y - 3.0f, 1.5f, 6.0f);
-            g.fillRect (c.x + 1.0f, c.y - 3.0f, 1.5f, 6.0f);
-        }
-        else
-        {
-            g.setFont (theme::mono (6.5f));
-            g.drawText (juce::String::fromUTF8 ("\xe2\x96\xb6"),
-                        play.translated (1.0f, 0.0f), juce::Justification::centred);
+            g.setColour (accent ? theme::accentSoft : theme::text);
+            g.fillEllipse (mute.reduced (5.0f));
         }
 
         const auto scrub = scrubberBounds().toFloat();
@@ -146,24 +159,49 @@ void StemRowComponent::paint (juce::Graphics& g)
                     juce::Justification::centredLeft);
     }
 
-    body.removeFromTop (titleGap);
-
     // --- waveform: 70 columns, 1.5px gap, centred ---
     {
-        auto waveArea = body.toFloat();
+        const auto waveArea = waveformBounds().toFloat();
         const int cols = (int) wave.size();
 
         if (cols > 0 && waveArea.getHeight() > 2.0f)
         {
             const auto colW = (waveArea.getWidth() - 1.5f * (float) (cols - 1)) / (float) cols;
+            const auto head = length > 0.0 ? (float) juce::jlimit (0.0, 1.0, position / length) : 0.0f;
 
-            g.setColour (accent ? theme::accentMid : theme::text60);
+            // Burning only reads as "audible": muted rows stay static + dimmed.
+            const bool burning = playing && ! muted;
+
+            const auto baseCol = (accent ? theme::accentMid : theme::text60)
+                                     .withMultipliedAlpha (rowAlpha);
+            const auto flameCol = theme::accentSoft;
 
             for (int i = 0; i < cols; ++i)
             {
                 const auto h = juce::jmax (1.0f, wave[(size_t) i] * waveArea.getHeight());
                 const auto x = waveArea.getX() + (float) i * (colW + 1.5f);
-                g.fillRect (x, waveArea.getCentreY() - h * 0.5f, colW, h);
+                const auto y = waveArea.getCentreY() - h * 0.5f;
+
+                const auto centre = ((float) i + 0.5f) / (float) cols;
+                const auto ramp = burning ? ui::emberRamp (centre, head) : 0.0f;
+
+                g.setColour (baseCol.withMultipliedAlpha (1.0f - 0.75f * ramp));
+                g.fillRect (x, y, colW, h);
+
+                if (ramp > 0.0f)
+                {
+                    g.setColour (flameCol.withAlpha (
+                        ui::emberAlpha (ui::emberFor (i, emberRow), clock, ramp, 0.0f)));
+                    g.fillRect (x, y, colW, h);
+                }
+            }
+
+            // Shared playhead: the same line on every row ties the five together.
+            if (playing)
+            {
+                g.setColour (theme::accentMid);
+                g.fillRect (waveArea.getX() + head * waveArea.getWidth(), waveArea.getY(),
+                            1.0f, waveArea.getHeight());
             }
         }
     }
@@ -190,7 +228,7 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
     }
 
     if (! draggingOut && e.getDistanceFromDragStart() > 6
-        && ! playButtonBounds().contains (e.getMouseDownPosition())
+        && ! muteButtonBounds().contains (e.getMouseDownPosition())
         && wavFile.existsAsFile())
     {
         draggingOut = true;
@@ -201,10 +239,22 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
 
 void StemRowComponent::mouseUp (const juce::MouseEvent& e)
 {
-    if (! draggingOut && ! scrubbing
-        && playButtonBounds().contains (e.getPosition())
-        && onPlayToggle != nullptr)
-        onPlayToggle();
+    if (! draggingOut && ! scrubbing)
+    {
+        const auto waveArea = waveformBounds();
+
+        if (muteButtonBounds().contains (e.getPosition()) && onMuteToggle != nullptr)
+        {
+            onMuteToggle();
+        }
+        else if (e.getDistanceFromDragStart() < clickSlop
+                 && waveArea.contains (e.getPosition())
+                 && waveArea.getWidth() > 0 && onSeek != nullptr)
+        {
+            onSeek (juce::jlimit (0.0, 1.0,
+                                  (double) (e.x - waveArea.getX()) / (double) waveArea.getWidth()));
+        }
+    }
 
     draggingOut = false;
     scrubbing = false;

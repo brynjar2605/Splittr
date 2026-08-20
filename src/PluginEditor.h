@@ -30,6 +30,7 @@ private:
     void browseForAudioFile();
     void browseForModelFile();
     void exportStems();
+    splittr::AuditionPlayer::StemFiles stemFiles() const; // current snapshot's five WAVs
     static bool isSupportedAudioFile (const juce::String& path);
 
     SplittrAudioProcessor& splittrProcessor;

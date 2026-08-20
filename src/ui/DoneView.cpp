@@ -20,10 +20,11 @@ DoneView::DoneView()
     }
 }
 
-void DoneView::update (const EngineSnapshot& s)
+void DoneView::update (const EngineSnapshot& s, bool isPlaying)
 {
     const auto dot = juce::String::fromUTF8 (" \xc2\xb7 ");
 
+    playing = isPlaying;
     statsText.clear();
 
     if (s.bpm > 0.0)
@@ -55,24 +56,29 @@ void DoneView::paint (juce::Graphics& g)
 
     auto x = footer.getX();
 
-    const auto drawAction = [&] (const juce::String& label, int actionId) -> juce::Rectangle<int>
+    const auto drawAction = [&] (const juce::String& label, int actionId,
+                                 juce::Colour idle) -> juce::Rectangle<int>
     {
         const juce::Rectangle<int> r (x, footer.getY(), (int) ui::textWidth (font, label) + 2,
                                       footer.getHeight());
-        g.setColour (hoveredAction == actionId ? theme::text : theme::text50);
+        g.setColour (hoveredAction == actionId ? theme::text : idle);
         g.drawText (label, r, juce::Justification::centredLeft);
         x = r.getRight() + 14;
         return r;
     };
+
+    // Leftmost: the one global transport control for all five stems.
+    playBounds = drawAction (playing ? "PAUSE" : "PLAY", 4,
+                             playing ? theme::accentSoft : theme::text50);
 
     g.setColour (theme::text50);
     g.drawText (statsText, x, footer.getY(), (int) ui::textWidth (font, statsText) + 2,
                 footer.getHeight(), juce::Justification::centredLeft);
     x += (int) ui::textWidth (font, statsText) + 14;
 
-    revealBounds = drawAction ("REVEAL", 1);
-    exportBounds = drawAction (juce::String::fromUTF8 ("EXPORT\xe2\x80\xa6"), 2);
-    newFileBounds = drawAction ("NEW FILE", 3);
+    revealBounds = drawAction ("REVEAL", 1, theme::text50);
+    exportBounds = drawAction (juce::String::fromUTF8 ("EXPORT\xe2\x80\xa6"), 2, theme::text50);
+    newFileBounds = drawAction ("NEW FILE", 3, theme::text50);
 
     g.setColour (theme::accentSoft);
     g.drawText ("DRAG A ROW TO A TRACK", footer, juce::Justification::centredRight);
@@ -80,7 +86,9 @@ void DoneView::paint (juce::Graphics& g)
 
 void DoneView::mouseUp (const juce::MouseEvent& e)
 {
-    if (revealBounds.contains (e.getPosition()) && onReveal != nullptr)
+    if (playBounds.contains (e.getPosition()) && onPlayToggle != nullptr)
+        onPlayToggle();
+    else if (revealBounds.contains (e.getPosition()) && onReveal != nullptr)
         onReveal();
     else if (exportBounds.contains (e.getPosition()) && onExport != nullptr)
         onExport();
@@ -90,8 +98,9 @@ void DoneView::mouseUp (const juce::MouseEvent& e)
 
 void DoneView::mouseMove (const juce::MouseEvent& e)
 {
-    const auto action = revealBounds.contains (e.getPosition()) ? 1
-                        : exportBounds.contains (e.getPosition()) ? 2
+    const auto action = playBounds.contains (e.getPosition())      ? 4
+                        : revealBounds.contains (e.getPosition())  ? 1
+                        : exportBounds.contains (e.getPosition())  ? 2
                         : newFileBounds.contains (e.getPosition()) ? 3
                                                                    : 0;
     if (action != hoveredAction)

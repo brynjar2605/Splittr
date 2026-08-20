@@ -63,18 +63,24 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         engine.requestNewFile();
     };
 
+    doneView.onPlayToggle = [this] { splittrProcessor.getAudition().togglePlay (stemFiles()); };
+
     for (int i = 0; i < splittr::numStems; ++i)
     {
         auto& row = doneView.row (i);
 
-        row.onPlayToggle = [&engine, &audition, i]
-        { audition.toggle (engine.getSnapshot().stems[(size_t) i].wav, i); };
+        row.onMuteToggle = [&audition, i] { audition.setMuted (i, ! audition.isMuted (i)); };
 
-        row.onSeek = [&engine, &audition, i] (double f)
+        // Seeking is how you audition a spot, so a click on a cold transport
+        // starts the shared playback rather than silently moving the playhead.
+        row.onSeek = [this] (double f)
         {
-            if (audition.currentStemId() != i)
-                audition.toggle (engine.getSnapshot().stems[(size_t) i].wav, i);
-            audition.seekFraction (f);
+            auto& player = splittrProcessor.getAudition();
+
+            if (! player.isLoaded())
+                player.play (stemFiles());
+
+            player.seekFraction (f);
         };
     }
 
@@ -203,6 +209,18 @@ void SplittrAudioProcessorEditor::exportStems()
                           });
 }
 
+splittr::AuditionPlayer::StemFiles SplittrAudioProcessorEditor::stemFiles() const
+{
+    const auto snap = splittrProcessor.getEngine().getSnapshot();
+
+    splittr::AuditionPlayer::StemFiles files;
+
+    for (int i = 0; i < splittr::numStems; ++i)
+        files[(size_t) i] = snap.stems[(size_t) i].wav;
+
+    return files;
+}
+
 void SplittrAudioProcessorEditor::browseForModelFile()
 {
     chooser = std::make_unique<juce::FileChooser> (
@@ -290,7 +308,7 @@ void SplittrAudioProcessorEditor::timerCallback()
     audition.stopIfFinished();
 
     auto snap = engine.getSnapshot();
-    applyUiPreview (snap, animationClock);
+    const bool preview = applyUiPreview (snap, animationClock);
 
     // header meta per state
     juce::String meta;
@@ -340,18 +358,31 @@ void SplittrAudioProcessorEditor::timerCallback()
 
     if (showDone)
     {
-        doneView.update (snap);
+        auto playing = audition.isPlaying();
+        auto pos = audition.positionSeconds();
+        auto len = audition.lengthSeconds();
 
-        const auto playingStem = audition.currentStemId();
-        const auto pos = audition.positionSeconds();
-        const auto len = audition.lengthSeconds();
+        if (len <= 0.0)
+            len = snap.sourceDuration;
+
+        // The preview harness has no audio, so fake a running transport (and
+        // one muted stem) to keep the flame and the dimming inspectable.
+        if (preview)
+        {
+            playing = true;
+            len = snap.sourceDuration;
+            pos = snap.progress * len;
+        }
+
+        doneView.update (snap, playing);
 
         for (int i = 0; i < splittr::numStems; ++i)
         {
             const auto& stem = snap.stems[(size_t) i];
+            const auto muted = preview ? i == splittr::stemBass : audition.isMuted (i);
+
             doneView.row (i).update (stem.wav, stem.waveform, stem.peakDb,
-                                     playingStem == i, pos,
-                                     playingStem == i ? len : snap.sourceDuration);
+                                     muted, playing, pos, len, animationClock);
         }
     }
 }
