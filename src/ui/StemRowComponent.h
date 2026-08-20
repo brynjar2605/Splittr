@@ -7,17 +7,17 @@ namespace splittr
 {
 
 // One draggable stem row (done state): grip dot-grid, name + peak, mute toggle
-// + scrubber, waveform. Press-and-drag anywhere that isn't the transport starts
-// an external file drag of the rendered WAV.
+// + elapsed time, waveform. Press-and-drag anywhere that isn't the transport
+// starts an external file drag of the rendered WAV.
 //
 // The row renders to whatever height DoneView gives it — 53px for the five-stem
 // set, ~40px when seven have to fit. The 16px title strip is fixed; the
 // waveform takes what is left, and the vertical padding tightens below 46px.
 //
 // All stems share one transport, so the row only reports intent: the circle
-// toggles this stem's mute, a plain click on the waveform (mouse-up under 5px
-// of travel) seeks the shared transport, and the 60px scrubber drag-scrubs it.
-// Anything with real travel is still the file drag-out.
+// toggles this stem's mute, and a plain click on the waveform (mouse-up under
+// 5px of travel) seeks the shared transport. Anything with real travel is still
+// the file drag-out.
 class StemRowComponent : public juce::Component
 {
 public:
@@ -72,7 +72,6 @@ private:
     void startFileDrag (const juce::File&);
 
     juce::Rectangle<int> muteButtonBounds() const;
-    juce::Rectangle<int> scrubberBounds() const;
     juce::Rectangle<int> midiChipBounds() const; // empty while hidden
     juce::Rectangle<int> waveformBounds() const;
 
@@ -98,7 +97,6 @@ private:
     bool hovered = false;
     bool midiHovered = false;
     bool draggingOut = false;
-    bool scrubbing = false;
 
     // Which control the press landed on, so a gesture that starts on the chip
     // never becomes the row's WAV drag.

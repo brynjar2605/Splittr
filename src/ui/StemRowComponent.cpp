@@ -10,7 +10,6 @@ namespace
     constexpr int gripWidth = 26;
     constexpr int padX = 10;
     constexpr int titleRowHeight = 16; // fixed: the name/peak/transport strip
-    constexpr int scrubberWidth = 60;
     constexpr int muteSize = 16;
     constexpr int elapsedWidth = 26;
 
@@ -103,14 +102,8 @@ int StemRowComponent::titleGap() const
 juce::Rectangle<int> StemRowComponent::muteButtonBounds() const
 {
     const auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, verticalPad());
-    const auto x = body.getRight() - elapsedWidth - 8 - scrubberWidth - 8 - muteSize;
+    const auto x = body.getRight() - elapsedWidth - 8 - muteSize;
     return { x, body.getY(), muteSize, muteSize };
-}
-
-juce::Rectangle<int> StemRowComponent::scrubberBounds() const
-{
-    const auto mute = muteButtonBounds();
-    return { mute.getRight() + 8, mute.getY(), scrubberWidth, muteSize };
 }
 
 juce::Rectangle<int> StemRowComponent::midiChipBounds() const
@@ -222,7 +215,7 @@ void StemRowComponent::paint (juce::Graphics& g)
         g.drawText (midiLabel (working), chip, juce::Justification::centred);
     }
 
-    // --- transport cluster: mute dot + shared scrubber ---
+    // --- transport cluster: mute dot + elapsed ---
     {
         const auto mute = muteButtonBounds().toFloat();
         const auto ringCol = muted ? theme::text35
@@ -238,29 +231,13 @@ void StemRowComponent::paint (juce::Graphics& g)
             g.fillEllipse (mute.reduced (5.0f));
         }
 
-        const auto scrub = scrubberBounds().toFloat();
-        const auto track = juce::Rectangle<float> (scrub.getX(), scrub.getCentreY() - 1.5f,
-                                                   (float) scrubberWidth, 3.0f);
-        g.setColour (theme::line);
-        g.fillRect (track);
-
-        const auto frac = length > 0.0 ? juce::jlimit (0.0, 1.0, position / length) : 0.0;
-
-        g.setColour (accent ? theme::accentMid : theme::rgba (221, 214, 230, 0.7f));
-        g.fillRect (track.withWidth ((float) frac * track.getWidth()));
-
-        if (accent && playing)
-        {
-            g.setColour (theme::accentPale);
-            g.fillRect (track.getX() + (float) frac * track.getWidth() - 1.0f,
-                        track.getY() - 3.0f, 2.0f, 9.0f);
-        }
-
+        // The readout sits where the mini scrubber used to (issue #22): the
+        // waveform is the scrubber now, so the strip carries only the number.
         g.setColour (theme::text45);
         g.setFont (theme::mono (8.0f));
         g.drawText (ui::mmss (playing ? position : length),
-                    juce::Rectangle<float> (scrub.getRight() + 8.0f, scrub.getY(),
-                                            (float) elapsedWidth, scrub.getHeight()),
+                    juce::Rectangle<float> (mute.getRight() + 8.0f, mute.getY(),
+                                            (float) elapsedWidth, mute.getHeight()),
                     juce::Justification::centredLeft);
     }
 
@@ -319,23 +296,10 @@ void StemRowComponent::mouseDown (const juce::MouseEvent& e)
 {
     draggingOut = false;
     pressedMidi = midiChipBounds().contains (e.getPosition());
-    scrubbing = ! pressedMidi && scrubberBounds().contains (e.getPosition());
-
-    if (scrubbing && onSeek != nullptr)
-        onSeek (juce::jlimit (0.0, 1.0,
-                              (double) (e.x - scrubberBounds().getX()) / scrubberWidth));
 }
 
 void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
 {
-    if (scrubbing)
-    {
-        if (onSeek != nullptr)
-            onSeek (juce::jlimit (0.0, 1.0,
-                                  (double) (e.x - scrubberBounds().getX()) / scrubberWidth));
-        return;
-    }
-
     if (draggingOut || e.getDistanceFromDragStart() <= 6)
         return;
 
@@ -387,7 +351,7 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
         return;
     }
 
-    if (! draggingOut && ! scrubbing)
+    if (! draggingOut)
     {
         const auto waveArea = waveformBounds();
 
@@ -399,13 +363,15 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
                  && waveArea.contains (e.getPosition())
                  && waveArea.getWidth() > 0 && onSeek != nullptr)
         {
+            // Seeking is click-jumps only now the mini scrubber is gone — drag
+            // on the waveform is the file drag-out. If continuous scrubbing is
+            // missed, ⌘-drag here is where it goes.
             onSeek (juce::jlimit (0.0, 1.0,
                                   (double) (e.x - waveArea.getX()) / (double) waveArea.getWidth()));
         }
     }
 
     draggingOut = false;
-    scrubbing = false;
 }
 
 void StemRowComponent::mouseMove (const juce::MouseEvent& e)
