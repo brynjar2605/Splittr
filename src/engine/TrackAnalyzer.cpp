@@ -2,6 +2,9 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include <algorithm>
+#include <numeric>
+
 namespace splittr
 {
 
@@ -30,97 +33,585 @@ namespace
     }
 
     //==========================================================================
-    double detectBpm (const juce::AudioBuffer<float>& mono)
+    // Tempo detection, in four stages:
+    //   1. multi-band spectral-flux onset envelope (log-compressed magnitudes)
+    //   2. autocorrelation -> comb score over a fine BPM grid, so a tempo is
+    //      credited for the support of its own metrical multiples
+    //   3. candidate rescoring: pulse-train alignment (precision/recall
+    //      F-measure) times a log-normal perceptual prior -> octave choice
+    //   4. parabolic refinement of the winning peak + a confidence measure
+    //==========================================================================
+    constexpr int kOnsetFftOrder = 10;
+    constexpr int kOnsetFrame = 1 << kOnsetFftOrder;  // 1024 samples, ~23 ms
+    constexpr int kOnsetHop = 256;                    // ~172 envelope frames/s
+    constexpr double kOnsetFps = kSampleRate / kOnsetHop;
+    constexpr double kMinBpm = 50.0;
+    constexpr double kMaxBpm = 210.0;
+    constexpr double kPreferredBpm = 120.0;           // prior centre (log-normal)
+    constexpr double kPriorWidthOctaves = 0.95;       // prior sigma, in log2 units
+    constexpr double kMinConfidence = 0.30;           // below this we report nothing
+
+    struct OnsetEnvelope
     {
-        constexpr int frame = 1024, hop = 512;
-        const auto fps = kSampleRate / hop; // ~86 envelope frames per second
+        std::vector<double> values;      // half-wave rectified, local mean removed
+        double framesPerSecond = 0.0;
+    };
 
-        const auto numFrames = (mono.getNumSamples() - frame) / hop;
+    // Bands are wide and few: enough to keep a soft hi-hat from being buried
+    // under a loud bass line, without slicing the spectrum so finely that
+    // steady tonal partials start to look like onsets.
+    struct Band { double lowHz, highHz, weight; };
 
-        if (numFrames < (int) (10 * fps)) // need ~10s to say anything
-            return 0.0;
+    constexpr Band kBands[] = { {  30.0,   100.0, 1.5 },   // kick fundamental
+                                { 100.0,   250.0, 1.1 },   // snare body, bass
+                                { 250.0,   600.0, 0.8 },
+                                { 600.0,  1500.0, 0.8 },
+                                { 1500.0, 3500.0, 1.1 },   // snare crack
+                                { 3500.0, 8000.0, 1.4 },   // hats, transients
+                                { 8000.0, 16000.0, 1.2 } };
 
-        // Onset envelope: rectified frame-to-frame RMS increase.
-        std::vector<double> envelope ((size_t) numFrames, 0.0);
+    constexpr int kNumBands = (int) (sizeof (kBands) / sizeof (Band));
+
+    OnsetEnvelope onsetEnvelope (const juce::AudioBuffer<float>& mono)
+    {
+        OnsetEnvelope out;
+        out.framesPerSecond = kOnsetFps;
+
+        const auto numFrames = (mono.getNumSamples() - kOnsetFrame) / kOnsetHop;
+
+        if (numFrames < (int) (8 * out.framesPerSecond))
+            return out;
+
+        juce::dsp::FFT fft (kOnsetFftOrder);
+        juce::dsp::WindowingFunction<float> window ((size_t) kOnsetFrame,
+                                                    juce::dsp::WindowingFunction<float>::hann);
+
+        const auto binHz = kSampleRate / kOnsetFrame;
+        const auto numBins = kOnsetFrame / 2;
+
+        std::array<int, kNumBands + 1> bandEdge {};
+        for (int b = 0; b < kNumBands; ++b)
+            bandEdge[(size_t) b] = juce::jlimit (1, numBins - 1, (int) std::round (kBands[b].lowHz / binHz));
+        bandEdge[kNumBands] = juce::jlimit (1, numBins, (int) std::round (kBands[kNumBands - 1].highHz / binHz));
+
+        // Log compression: the ear's loudness curve, and it stops one loud
+        // kick from swamping every other onset in the envelope.
+        constexpr double logGamma = 200.0;
+
+        std::vector<float> fftData ((size_t) kOnsetFrame * 2, 0.0f);
+        std::vector<double> current ((size_t) numBins, 0.0), previous ((size_t) numBins, 0.0);
+        std::vector<std::vector<double>> bandFlux ((size_t) kNumBands,
+                                                   std::vector<double> ((size_t) numFrames, 0.0));
+
         const auto* samples = mono.getReadPointer (0);
-        double previousRms = 0.0;
 
         for (int n = 0; n < numFrames; ++n)
         {
-            double sum = 0.0;
-            for (int i = 0; i < frame; ++i)
+            std::fill (fftData.begin(), fftData.end(), 0.0f);
+            std::copy (samples + n * kOnsetHop, samples + n * kOnsetHop + kOnsetFrame, fftData.begin());
+
+            window.multiplyWithWindowingTable (fftData.data(), (size_t) kOnsetFrame);
+            fft.performFrequencyOnlyForwardTransform (fftData.data());
+
+            for (int bin = bandEdge[0]; bin < bandEdge[kNumBands]; ++bin)
+                current[(size_t) bin] = std::log1p (logGamma * (double) fftData[(size_t) bin]);
+
+            for (int b = 0; b < kNumBands; ++b)
             {
-                const double v = samples[n * hop + i];
-                sum += v * v;
+                double flux = 0.0;
+
+                for (int bin = bandEdge[(size_t) b]; bin < bandEdge[(size_t) b + 1]; ++bin)
+                    flux += juce::jmax (0.0, current[(size_t) bin] - previous[(size_t) bin]);
+
+                bandFlux[(size_t) b][(size_t) n] = flux;
             }
 
-            const auto rms = std::sqrt (sum / frame);
-            envelope[(size_t) n] = juce::jmax (0.0, rms - previousRms);
-            previousRms = rms;
+            current.swap (previous);
         }
 
-        // Remove DC so autocorrelation peaks mean periodicity, not loudness.
-        double mean = 0.0;
-        for (auto v : envelope)
-            mean += v;
-        mean /= (double) envelope.size();
-        for (auto& v : envelope)
-            v -= mean;
+        // Each band contributes on its own scale: a band with more bins, or
+        // simply more energy, must not decide the envelope by itself.
+        out.values.assign ((size_t) numFrames, 0.0);
 
-        // Autocorrelate over lags covering 60-190 BPM.
-        const auto lagFor = [fps] (double bpm) { return (int) std::round (fps * 60.0 / bpm); };
-        const auto minLag = lagFor (190.0);
-        const auto maxLag = lagFor (60.0);
+        for (int b = 0; b < kNumBands; ++b)
+        {
+            const auto& flux = bandFlux[(size_t) b];
+            const auto mean = std::accumulate (flux.begin(), flux.end(), 0.0) / (double) flux.size();
 
-        double norm = 0.0;
-        for (auto v : envelope)
-            norm += v * v;
+            if (mean <= 1.0e-12)
+                continue;
 
-        if (norm <= 0.0)
-            return 0.0;
+            const auto gain = kBands[b].weight / mean;
 
-        std::vector<double> score ((size_t) maxLag + 1, 0.0);
-        double bestScore = 0.0;
+            for (size_t n = 0; n < flux.size(); ++n)
+                out.values[n] += flux[n] * gain;
+        }
 
-        for (int lag = minLag; lag <= maxLag; ++lag)
+        // Subtract a running local mean and rectify: kills slow loudness
+        // drift, leaves peaks that stand out against their own neighbourhood.
+        const auto half = juce::jmax (1, (int) std::round (0.25 * out.framesPerSecond));
+        std::vector<double> smoothed ((size_t) numFrames, 0.0);
+        double running = 0.0;
+
+        for (int n = 0; n < juce::jmin (numFrames, half); ++n)
+            running += out.values[(size_t) n];
+
+        for (int n = 0; n < numFrames; ++n)
+        {
+            const auto add = n + half;
+            const auto drop = n - half - 1;
+
+            if (add < numFrames)
+                running += out.values[(size_t) add];
+            if (drop >= 0)
+                running -= out.values[(size_t) drop];
+
+            const auto lo = juce::jmax (0, n - half);
+            const auto hi = juce::jmin (numFrames - 1, n + half);
+            smoothed[(size_t) n] = running / (double) (hi - lo + 1);
+        }
+
+        for (int n = 0; n < numFrames; ++n)
+            out.values[(size_t) n] = juce::jmax (0.0, out.values[(size_t) n] - smoothed[(size_t) n]);
+
+        return out;
+    }
+
+    //==========================================================================
+    // Unbiased autocorrelation of the (mean-removed) onset envelope,
+    // normalised so lag 0 is 1.0.
+    std::vector<double> autocorrelation (const std::vector<double>& envelope, int maxLag)
+    {
+        const auto n = (int) envelope.size();
+        const auto mean = std::accumulate (envelope.begin(), envelope.end(), 0.0) / (double) n;
+
+        std::vector<double> centred ((size_t) n, 0.0);
+        for (int i = 0; i < n; ++i)
+            centred[(size_t) i] = envelope[(size_t) i] - mean;
+
+        std::vector<double> acf ((size_t) maxLag + 1, 0.0);
+
+        for (int lag = 0; lag <= maxLag; ++lag)
         {
             double sum = 0.0;
-            for (size_t n = 0; n + (size_t) lag < envelope.size(); ++n)
-                sum += envelope[n] * envelope[n + (size_t) lag];
+            for (int i = 0; i + lag < n; ++i)
+                sum += centred[(size_t) i] * centred[(size_t) (i + lag)];
 
-            score[(size_t) lag] = sum / norm;
-            bestScore = juce::jmax (bestScore, score[(size_t) lag]);
+            acf[(size_t) lag] = sum / (double) (n - lag);
         }
 
-        if (bestScore <= 0.0)
+        if (acf[0] > 0.0)
+            for (auto& v : acf)
+                v /= acf[0];
+
+        return acf;
+    }
+
+    double interpolatedAt (const std::vector<double>& values, double index)
+    {
+        if (index < 0.0 || index >= (double) values.size() - 1.0)
             return 0.0;
 
-        // Pick the best lag, folding tempo octaves into a preferred 70-180
-        // range: a candidate near half/double the best lag with comparable
-        // correlation wins if it lands in range.
-        int bestLag = minLag;
-        for (int lag = minLag; lag <= maxLag; ++lag)
-            if (score[(size_t) lag] > score[(size_t) bestLag])
-                bestLag = lag;
+        const auto i = (size_t) index;
+        const auto f = index - (double) i;
+        return values[i] * (1.0 - f) + values[i + 1] * f;
+    }
 
-        auto bpm = fps * 60.0 / bestLag;
+    // Comb score: a tempo is only believable if the envelope also repeats at
+    // its slower metrical multiples (half-bar, bar, ...), which is what
+    // separates a real pulse from an isolated autocorrelation bump.
+    // `slack` widens each multiple into a small plateau, absorbing tempo drift
+    // while candidates are compared; the refinement pass runs with slack 0 so
+    // the plateau cannot bias the final figure.
+    double combScore (const std::vector<double>& acf, double lag, double slack = 0.01)
+    {
+        constexpr double weights[] = { 1.0, 0.75, 0.5, 0.4 };
+        constexpr int numMultiples = (int) (sizeof (weights) / sizeof (double));
 
-        const auto scoreNear = [&] (int lag)
+        double sum = 0.0, weightSum = 0.0;
+
+        for (int k = 0; k < numMultiples; ++k)
         {
-            double s = 0.0;
-            for (int l = lag - 1; l <= lag + 1; ++l)
-                if (l >= minLag && l <= maxLag)
-                    s = juce::jmax (s, score[(size_t) l]);
-            return s;
+            const auto multiple = lag * (k + 1);
+
+            if (multiple >= (double) acf.size() - 1.0)
+                break;
+
+            auto best = interpolatedAt (acf, multiple);
+
+            if (slack > 0.0)
+            {
+                const auto width = juce::jmax (0.5, slack * multiple);
+                best = juce::jmax (best, juce::jmax (interpolatedAt (acf, multiple - width),
+                                                     interpolatedAt (acf, multiple + width)));
+            }
+
+            sum += weights[k] * best;
+            weightSum += weights[k];
+        }
+
+        return weightSum > 0.0 ? sum / weightSum : 0.0;
+    }
+
+    // Perceptual tempo prior: log-normal around 120 BPM. Deliberately gentle —
+    // it breaks ties between octaves, it does not overrule the evidence.
+    double tempoPrior (double bpm)
+    {
+        const auto z = std::log2 (bpm / kPreferredBpm) / kPriorWidthOctaves;
+        return std::exp (-0.5 * z * z);
+    }
+
+    //==========================================================================
+    // How well a pulse train at this tempo explains the onset envelope.
+    //
+    //   recall    = share of onset energy that lands on a beat
+    //   precision = how evenly the beats are filled (a doubled tempo leaves
+    //               every other beat empty; a halved one leaves onsets out)
+    //
+    // Their F-measure is the octave discriminator: too slow costs recall,
+    // too fast costs precision.
+    struct PulseFit
+    {
+        double fMeasure = 0.0;
+        double precision = 0.0;
+        double recall = 0.0;
+        double alternation = 1.0;  // weak-beat / strong-beat energy, period 2
+    };
+
+    PulseFit pulseFit (const std::vector<double>& envelope,
+                       const std::vector<double>& prefixSum,
+                       double lag)
+    {
+        PulseFit fit;
+
+        const auto n = (int) envelope.size();
+        const auto total = prefixSum.back();
+
+        // The guard also keeps the tolerance window narrower than the lag, so
+        // neighbouring pulse windows can never overlap and double-count.
+        if (lag < 8.0 || total <= 0.0 || (double) n < 4.0 * lag)
+            return fit;
+
+        const auto tolerance = juce::jlimit (1, (int) (lag * 0.2), (int) std::round (0.06 * lag));
+
+        const auto windowSum = [&] (double centre)
+        {
+            const auto lo = juce::jlimit (0, n, (int) std::round (centre) - tolerance);
+            const auto hi = juce::jlimit (0, n, (int) std::round (centre) + tolerance + 1);
+            return prefixSum[(size_t) hi] - prefixSum[(size_t) lo];
         };
 
-        if (bpm < 70.0 && scoreNear (bestLag / 2) > 0.6 * score[(size_t) bestLag])
-            bpm *= 2.0;
-        else if (bpm > 180.0 && bestLag * 2 <= maxLag
-                 && scoreNear (bestLag * 2) > 0.6 * score[(size_t) bestLag])
-            bpm /= 2.0;
+        // The phase is fitted per segment, not once for the whole track: real
+        // players drift, and a pulse train locked at 0:00 would be half a beat
+        // out by 0:30 and score like noise for it.
+        const auto segFrames = juce::jmax ((int) std::ceil (8.0 * lag),
+                                           (int) std::round (7.0 * kOnsetFps));
+        const auto numSegments = juce::jmax (1, n / segFrames);
 
-        return std::round (bpm * 10.0) / 10.0;
+        std::vector<double> pulses;
+        double alternationSum = 0.0, alternationWeight = 0.0;
+
+        for (int s = 0; s < numSegments; ++s)
+        {
+            const auto from = (int) ((int64_t) n * s / numSegments);
+            const auto to = (int) ((int64_t) n * (s + 1) / numSegments);
+
+            auto bestPhase = 0.0;
+            auto bestTotal = -1.0;
+
+            for (int phase = 0; phase < (int) std::ceil (lag); ++phase)
+            {
+                double sum = 0.0;
+                for (double p = from + phase; p < (double) to; p += lag)
+                    sum += windowSum (p);
+
+                if (sum > bestTotal)
+                {
+                    bestTotal = sum;
+                    bestPhase = from + phase;
+                }
+            }
+
+            double even = 0.0, odd = 0.0;
+            int numEven = 0, numOdd = 0;
+
+            for (double p = bestPhase; p < (double) to; p += lag)
+            {
+                const auto value = windowSum (p);
+                pulses.push_back (value);
+
+                // Parity is counted inside the segment: each segment has its
+                // own phase, so a global index would mean nothing.
+                if ((numEven + numOdd) % 2 == 0) { even += value; ++numEven; }
+                else                             { odd += value; ++numOdd; }
+            }
+
+            if (numEven > 0 && numOdd > 0)
+            {
+                even /= (double) numEven;
+                odd /= (double) numOdd;
+
+                const auto strong = juce::jmax (even, odd);
+                const auto weight = even + odd;
+
+                alternationSum += weight * (strong > 0.0 ? juce::jmin (even, odd) / strong : 1.0);
+                alternationWeight += weight;
+            }
+        }
+
+        if (pulses.size() < 4)
+            return fit;
+
+        const auto captured = std::accumulate (pulses.begin(), pulses.end(), 0.0);
+
+        auto sorted = pulses;
+        std::sort (sorted.begin(), sorted.end());
+        const auto strong = sorted[(size_t) ((sorted.size() * 3) / 4)]; // 75th percentile
+
+        fit.recall = juce::jlimit (0.0, 1.0, captured / total);
+        fit.precision = strong > 0.0
+                            ? juce::jlimit (0.0, 1.0, (captured / (double) pulses.size()) / strong)
+                            : 0.0;
+        fit.fMeasure = (fit.precision + fit.recall) > 0.0
+                           ? 2.0 * fit.precision * fit.recall / (fit.precision + fit.recall)
+                           : 0.0;
+
+        if (alternationWeight > 0.0)
+            fit.alternation = alternationSum / alternationWeight;
+
+        return fit;
+    }
+
+    //==========================================================================
+    // Does the whole track agree on this tempo? Each chunk is re-analysed on
+    // its own; music keeps landing on the same tempo (or a metrical relative
+    // of it) chunk after chunk, while rubato and arrhythmic material scatter.
+    // Tolerant of drift by design — a chunk only has to agree to within a few
+    // percent, not stay phase-locked.
+    double tempoAgreement (const std::vector<double>& env, double bpm)
+    {
+        const auto n = (int) env.size();
+        const auto chunk = (int) std::round (11.0 * kOnsetFps);
+        const auto numChunks = juce::jlimit (1, 6, n / chunk);
+
+        if (numChunks < 2)
+            return 1.0;
+
+        static const double relatives[] = { 1.0, 0.5, 2.0, 1.5, 2.0 / 3.0 };
+
+        auto agreeing = 0;
+
+        for (int c = 0; c < numChunks; ++c)
+        {
+            const auto from = (size_t) ((int64_t) n * c / numChunks);
+            const auto to = (size_t) ((int64_t) n * (c + 1) / numChunks);
+
+            const std::vector<double> part (env.begin() + (long) from, env.begin() + (long) to);
+            const auto maxLag = juce::jmin ((int) (part.size() / 3),
+                                            (int) std::ceil (4.0 * 60.0 * kOnsetFps / kMinBpm));
+
+            if (maxLag < (int) std::ceil (60.0 * kOnsetFps / kMinBpm))
+                continue;
+
+            const auto acf = autocorrelation (part, maxLag);
+
+            auto bestBpm = 0.0, best = 0.0;
+
+            for (int i = 0; i < 200; ++i)
+            {
+                const auto candidate = kMinBpm * std::pow (kMaxBpm / kMinBpm, i / 199.0);
+                const auto s = combScore (acf, 60.0 * kOnsetFps / candidate) * tempoPrior (candidate);
+
+                if (s > best)
+                {
+                    best = s;
+                    bestBpm = candidate;
+                }
+            }
+
+            for (auto r : relatives)
+            {
+                if (bestBpm > 0.0 && std::abs (std::log2 (bestBpm / (bpm * r))) < 0.045) // ~3%
+                {
+                    ++agreeing;
+                    break;
+                }
+            }
+        }
+
+        return (double) agreeing / (double) numChunks;
+    }
+
+    //==========================================================================
+    double detectBpm (const juce::AudioBuffer<float>& mono, double& confidenceOut)
+    {
+        confidenceOut = 0.0;
+
+        const auto onsets = onsetEnvelope (mono);
+        const auto& env = onsets.values;
+        const auto fps = onsets.framesPerSecond;
+
+        if (env.size() < (size_t) (10 * fps)) // need ~10s to say anything
+            return 0.0;
+
+        const auto energy = std::accumulate (env.begin(), env.end(), 0.0);
+
+        if (energy <= 0.0)
+            return 0.0;
+
+        const auto lagFor = [fps] (double bpm) { return 60.0 * fps / bpm; };
+
+        const auto maxLag = juce::jmin ((int) (env.size() / 3),
+                                        (int) std::ceil (4.0 * lagFor (kMinBpm)));
+
+        if (maxLag < (int) std::ceil (lagFor (kMinBpm)))
+            return 0.0;
+
+        const auto acf = autocorrelation (env, maxLag);
+
+        std::vector<double> prefixSum (env.size() + 1, 0.0);
+        for (size_t i = 0; i < env.size(); ++i)
+            prefixSum[i + 1] = prefixSum[i] + env[i];
+
+        // --- stage 2: comb score over a logarithmic BPM grid ----------------
+        constexpr int gridSize = 600; // ~0.24% steps across 50-210 BPM
+        std::vector<double> grid ((size_t) gridSize, 0.0), gridScore ((size_t) gridSize, 0.0);
+
+        for (int i = 0; i < gridSize; ++i)
+        {
+            const auto bpm = kMinBpm * std::pow (kMaxBpm / kMinBpm, (double) i / (gridSize - 1));
+            grid[(size_t) i] = bpm;
+            gridScore[(size_t) i] = combScore (acf, lagFor (bpm));
+        }
+
+        const auto peakComb = *std::max_element (gridScore.begin(), gridScore.end());
+
+        if (peakComb <= 0.0)
+            return 0.0;
+
+        // --- stage 3: candidates = comb peaks and their metrical relatives --
+        std::vector<double> candidates;
+
+        const auto addCandidate = [&] (double bpm)
+        {
+            if (bpm < kMinBpm || bpm > kMaxBpm)
+                return;
+
+            for (auto existing : candidates)
+                if (std::abs (existing - bpm) < 0.005 * bpm)
+                    return;
+
+            candidates.push_back (bpm);
+        };
+
+        for (int i = 1; i < gridSize - 1; ++i)
+        {
+            if (gridScore[(size_t) i] <= gridScore[(size_t) i - 1]
+                || gridScore[(size_t) i] < gridScore[(size_t) i + 1]
+                || gridScore[(size_t) i] < 0.35 * peakComb)
+                continue;
+
+            static const double relatives[] = { 1.0, 0.5, 2.0, 1.5, 2.0 / 3.0, 1.0 / 3.0, 3.0 };
+
+            for (auto r : relatives)
+                addCandidate (grid[(size_t) i] * r);
+        }
+
+        if (candidates.empty())
+            return 0.0;
+
+        auto bestBpm = 0.0, bestScore = 0.0, bestF = 0.0, runnerUp = 0.0;
+
+        for (auto bpm : candidates)
+        {
+            const auto fit = pulseFit (env, prefixSum, lagFor (bpm));
+            const auto comb = combScore (acf, lagFor (bpm)) / peakComb;
+
+            // Comb support gates the candidate, the F-measure and the
+            // alternation penalty decide the octave (this is the half/double
+            // check, applied to every candidate rather than only at the end),
+            // and the prior breaks what is left over.
+            const auto score = (0.35 + 0.65 * comb)
+                               * fit.fMeasure
+                               * std::pow (fit.alternation, 0.7)
+                               * tempoPrior (bpm);
+
+            if (score > bestScore)
+            {
+                // Only count an unrelated candidate as the runner-up, so a
+                // near-duplicate peak does not deflate the confidence.
+                if (bestBpm > 0.0 && std::abs (std::log2 (bpm / bestBpm)) > 0.08)
+                    runnerUp = juce::jmax (runnerUp, bestScore);
+
+                bestScore = score;
+                bestBpm = bpm;
+                bestF = fit.fMeasure;
+            }
+            else if (bestBpm > 0.0 && std::abs (std::log2 (bpm / bestBpm)) > 0.08)
+            {
+                runnerUp = juce::jmax (runnerUp, score);
+            }
+        }
+
+        if (bestBpm <= 0.0)
+            return 0.0;
+
+        // --- stage 4: refine the peak, then measure confidence --------------
+        auto refined = bestBpm;
+        auto refinedScore = combScore (acf, lagFor (bestBpm), 0.0);
+
+        for (int i = -30; i <= 30; ++i)
+        {
+            const auto bpm = bestBpm * (1.0 + i * 0.0008); // +-2.4% in 0.08% steps
+            const auto s = combScore (acf, lagFor (bpm), 0.0);
+
+            if (s > refinedScore)
+            {
+                refinedScore = s;
+                refined = bpm;
+            }
+        }
+
+        // Sub-step accuracy: fit a parabola through the winning grid point and
+        // its two neighbours and take its vertex.
+        const auto step = refined * 0.0008;
+        const auto left = combScore (acf, lagFor (refined - step), 0.0);
+        const auto right = combScore (acf, lagFor (refined + step), 0.0);
+        const auto curvature = left - 2.0 * refinedScore + right;
+
+        if (curvature < 0.0)
+            refined += step * 0.5 * (left - right) / curvature;
+
+        // Confidence: how strongly the winning lag stands out from the rest of
+        // the autocorrelation, how cleanly a pulse train fits, and how far
+        // ahead of the best unrelated candidate it is.
+        const auto lagRange = (int) std::ceil (lagFor (kMinBpm));
+        auto acfMean = 0.0;
+        auto acfPeak = 0.0;
+
+        for (int lag = (int) std::floor (lagFor (kMaxBpm)); lag <= lagRange; ++lag)
+        {
+            acfMean += acf[(size_t) lag];
+            acfPeak = juce::jmax (acfPeak, acf[(size_t) lag]);
+        }
+
+        acfMean /= (double) juce::jmax (1, lagRange - (int) std::floor (lagFor (kMaxBpm)) + 1);
+
+        const auto prominence = juce::jlimit (0.0, 1.0, (acfPeak - acfMean) / 0.22);
+        const auto margin = bestScore > 0.0 ? juce::jlimit (0.0, 1.0, 1.0 - runnerUp / bestScore) : 0.0;
+        const auto agreement = tempoAgreement (env, bestBpm);
+        const auto confidence = juce::jlimit (0.0, 1.0,
+                                              std::sqrt (prominence)
+                                                  * bestF
+                                                  * (0.3 + 0.7 * agreement)
+                                                  * (0.55 + 0.45 * margin));
+
+        confidenceOut = confidence;
+
+        if (confidence < kMinConfidence)
+            return 0.0;
+
+        return std::round (juce::jlimit (kMinBpm, kMaxBpm, refined) * 10.0) / 10.0;
     }
 
     //==========================================================================
@@ -215,7 +706,7 @@ TrackAnalysis TrackAnalyzer::analyze (const juce::AudioBuffer<float>& stereo44k)
 
     const auto mono = monoSection (stereo44k);
 
-    result.bpm = detectBpm (mono);
+    result.bpm = detectBpm (mono, result.bpmConfidence);
     result.key = detectKey (mono);
 
     return result;

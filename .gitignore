@@ -1,5 +1,6 @@
 build/
 build-*/
+testdata/
 .DS_Store
 *.part
 .vscode/

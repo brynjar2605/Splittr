@@ -99,7 +99,8 @@ juce_add_console_app(splittr_cli PRODUCT_NAME "splittr_cli")
 target_sources(splittr_cli PRIVATE
     tools/splittr_cli/main.cpp
     src/engine/AudioFileIO.cpp
-    src/engine/DemucsSeparator.cpp)
+    src/engine/DemucsSeparator.cpp
+    src/engine/TrackAnalyzer.cpp)
 
 target_include_directories(splittr_cli PRIVATE src)
 
@@ -110,5 +111,6 @@ target_compile_definitions(splittr_cli PRIVATE
 target_link_libraries(splittr_cli PRIVATE
     demucs_cpp
     juce::juce_audio_formats
+    juce::juce_dsp
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)

@@ -1,19 +1,64 @@
 // M1 harness: proves the separation engine end-to-end before any plugin code.
 //
 //   splittr_cli <audio-in> <model.bin> <out-dir>
+//   splittr_cli --analyze <audio-in> [<audio-in> ...]
 //
-// Writes Vocals.wav and Instrumental.wav (32-bit float, 44.1 kHz) to out-dir.
+// Separation mode writes Vocals.wav and Instrumental.wav (32-bit float,
+// 44.1 kHz) to out-dir. Analyse mode prints tempo/key/confidence per file —
+// the validation harness for TrackAnalyzer.
 
 #include "engine/AudioFileIO.h"
 #include "engine/DemucsSeparator.h"
+#include "engine/TrackAnalyzer.h"
 
 #include <iostream>
 
+namespace
+{
+    int analyzeFiles (int numFiles, char** paths)
+    {
+        splittr::AudioFileIO io;
+        auto failures = 0;
+
+        for (int i = 0; i < numFiles; ++i)
+        {
+            const juce::File file (juce::File::getCurrentWorkingDirectory().getChildFile (paths[i]));
+
+            splittr::DecodedAudio decoded;
+            juce::String error;
+
+            if (! io.decodeToStereo44k (file, decoded, error))
+            {
+                std::cerr << error << "\n";
+                ++failures;
+                continue;
+            }
+
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            const auto analysis = splittr::TrackAnalyzer::analyze (decoded.buffer);
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+
+            // Machine-readable single line: name<TAB>bpm<TAB>confidence<TAB>key<TAB>ms
+            std::cout << file.getFileName() << "\t"
+                      << juce::String (analysis.bpm, 2) << "\t"
+                      << juce::String (analysis.bpmConfidence, 3) << "\t"
+                      << (analysis.key.isNotEmpty() ? analysis.key : juce::String ("-")) << "\t"
+                      << juce::String (elapsed, 0) << "\n";
+        }
+
+        return failures > 0 ? 1 : 0;
+    }
+} // namespace
+
 int main (int argc, char** argv)
 {
+    if (argc >= 3 && juce::String (argv[1]) == "--analyze")
+        return analyzeFiles (argc - 2, argv + 2);
+
     if (argc != 4)
     {
-        std::cerr << "Usage: splittr_cli <audio-in> <model.bin> <out-dir>\n";
+        std::cerr << "Usage: splittr_cli <audio-in> <model.bin> <out-dir>\n"
+                  << "       splittr_cli --analyze <audio-in> [<audio-in> ...]\n";
         return 1;
     }
 
