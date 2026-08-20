@@ -13,7 +13,7 @@ namespace
 
 void ConfirmView::setPendingFile (const juce::File& file)
 {
-    const auto line = file.getFileName().toUpperCase();
+    const auto line = ui::upperCased (file.getFileName());
 
     if (line != fileLine)
     {

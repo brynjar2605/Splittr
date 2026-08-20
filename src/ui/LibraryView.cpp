@@ -160,7 +160,7 @@ void LibraryView::paint (juce::Graphics& g)
 
         g.setColour (hot && ! hoveredDelete ? theme::accentSoft : theme::text);
         g.setFont (theme::mono (10.5f, 0.04f));
-        g.drawText (entry.sourceName.toUpperCase(), nameRow.withTrimmedRight (dateWidth + 10),
+        g.drawText (ui::upperCased (entry.sourceName), nameRow.withTrimmedRight (dateWidth + 10),
                     juce::Justification::centredLeft, true);
 
         g.setColour (theme::text40);
