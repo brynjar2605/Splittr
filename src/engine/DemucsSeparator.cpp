@@ -1,9 +1,14 @@
 #include "DemucsSeparator.h"
+#include "DemucsMetal.h"
 
 #include <model.hpp>
 
 #include <mutex>
 #include <thread>
+
+#if JUCE_MAC
+ #include <sys/sysctl.h>
+#endif
 
 namespace splittr
 {
@@ -23,15 +28,51 @@ namespace
     // runs a full demucs_inference on its own thread; the outputs are
     // crossfaded over the overlap and weight-normalised.
     constexpr int kOverlapSamples = (int) (0.75 * 44100.0);
-    constexpr int kMinSamplesPerChunk = 30 * 44100; // don't over-chunk short files
-    constexpr int kMaxChunks = 4;
+
+    // A chunk's work rounds up to whole 7.8 s model segments, so chunks much
+    // shorter than ~2 segment strides (~11.7 s) spend their time on padding:
+    // on a 45 s file, 3 chunks measured 1.62x faster than 1, but 4 chunks was
+    // slower than 3 (issue #24). 12 s keeps every chunk at least 2 strides.
+    constexpr int kMinSamplesPerChunk = 12 * 44100;
+
+    // Wall-clock gains flatten out well before the core count — the workers
+    // contend for the shared matrix hardware — and each extra chunk costs
+    // ~0.5 GB peak RSS (issue #24: 4 -> 10 chunks bought 11% for +3 GB).
+    constexpr int kMaxChunks = 8;
+
+    // Performance cores only: the stitch waits for the slowest chunk, and a
+    // chunk scheduled onto an efficiency core would gate the whole result.
+    int performanceCoreCount()
+    {
+       #if JUCE_MAC
+        int cores = 0;
+        auto size = sizeof (cores);
+
+        if (sysctlbyname ("hw.perflevel0.logicalcpu", &cores, &size, nullptr, 0) == 0
+            && cores > 0)
+            return cores;
+       #endif
+
+        return (int) std::thread::hardware_concurrency() / 2; // pre-hybrid CPUs
+    }
 
     int chooseNumChunks (int numSamples)
     {
-        const auto byCpu = juce::jlimit (1, kMaxChunks,
-                                         (int) std::thread::hardware_concurrency() / 2);
+        const auto byCpu = juce::jlimit (1, kMaxChunks, performanceCoreCount());
+
+        // Never regress below the pre-#24 cap of 4, but don't let the wider
+        // cap balloon peak RSS either: with the contiguous layer rewrites the
+        // workers overlap more, and 8 chunks measured ~15 GB peak on a 194 s
+        // song — too much of a 24 GB machine for a plugin that lives beside a
+        // DAW session. A quarter of physical RAM in chunks keeps 16 GB
+        // machines at today's four and gives bigger machines headroom instead
+        // of the last few percent.
+        const auto physicalGB = (int) (juce::SystemStats::getMemorySizeInMegabytes() / 1024);
+        const auto byMemory = juce::jmax (4, physicalGB / 4);
+
         const auto byLength = juce::jmax (1, numSamples / kMinSamplesPerChunk);
-        return juce::jmin (byCpu, byLength);
+
+        return juce::jmin (byCpu, byMemory, byLength);
     }
 
     // May throw CancelledException (user cancel, via sharedCb) or
@@ -192,13 +233,27 @@ int DemucsSeparator::expectedSegments (int numSamples)
     return 2 * perPass; // two shift passes
 }
 
+bool DemucsSeparator::gpuAvailable()
+{
+    // Delegated to DemucsMetal, which checks for an Apple-silicon-class GPU
+    // on a recent enough macOS (and honours the SPLITTR_NO_GPU test switch);
+    // the answer is cached over there.
+   #if JUCE_MAC
+    return metal::gpuAvailable();
+   #else
+    return false;
+   #endif
+}
+
 DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>& modelFiles,
                                                    const juce::AudioBuffer<float>& stereo44k,
                                                    const std::function<void (float, const juce::String&)>& onProgress,
                                                    const std::function<bool()>& shouldContinue,
                                                    SeparationResult& out,
-                                                   juce::String& error)
+                                                   juce::String& error,
+                                                   ComputeBackend backend)
 {
+    const bool useGpu = backend == ComputeBackend::gpu && gpuAvailable();
     jassert (stereo44k.getNumChannels() == 2);
     jassert (modelFiles.size() == 1 || modelFiles.size() == 4);
 
@@ -272,7 +327,38 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
                     : [&, m] (float p, const std::string& message)
                       { progressCallback (((float) m + p) / (float) numModels, message); };
 
-            auto modelOut = chunkedInference (model, audio, chooseNumChunks (numSamples), scopedCallback);
+            // GPU seam (issue #24): when useGpu, the Metal backend
+            // (DemucsMetal) replaces chunkedInference here — same model, same
+            // audio layout, same callback contract (progress in [0,1] and
+            // CancelledException out of the callback to cancel). The Metal
+            // path reports failure by returning false rather than throwing,
+            // so a gpu request can never fail a separation the CPU path
+            // could complete; htdemucs_6s always takes the CPU path (the
+            // Metal graph is built for the 4-source topology only).
+            Eigen::Tensor3dXf modelOut;
+            auto ranOnGpu = false;
+
+           #if JUCE_MAC
+            if (useGpu && model.is_4sources)
+            {
+                // MatrixXf (2, N) is col-major == interleaved stereo, and the
+                // metal side fills a (sources, 2, N) col-major tensor, so both
+                // buffers cross the firewall header raw (no Eigen over there).
+                modelOut = Eigen::Tensor3dXf (modelSources, 2, numSamples);
+                std::string metalError;
+
+                ranOnGpu = metal::inference (model, audio.data(), numSamples,
+                                             modelOut.data(), scopedCallback, metalError);
+
+                if (! ranOnGpu)
+                    scopedCallback (0.0f, "Metal backend unavailable, taking the CPU path: " + metalError);
+            }
+           #else
+            juce::ignoreUnused (useGpu);
+           #endif
+
+            if (! ranOnGpu)
+                modelOut = chunkedInference (model, audio, chooseNumChunks (numSamples), scopedCallback);
 
             if (numModels == 1)
             {

@@ -5,6 +5,7 @@
 
 #include "Phase.h"
 #include "AudioFileIO.h"
+#include "ComputeBackend.h"
 #include "ModelManager.h"
 #include "StemCache.h" // StemIndex / stemOrderFor
 #include "StemFx.h"
@@ -115,6 +116,18 @@ public:
     void startModelDownload();
     void locateModel (const juce::File&);         // manual "LOCATE FILE MANUALLY…"
     void setQuality (Quality);                    // FAST / BEST toggle
+
+    // PROCESSING (issue #24): where inference runs, persisted in Settings.xml
+    // beside the theme prefs. Static because the settings overlay reads and
+    // writes it without holding an engine; a job reads it when it starts, so a
+    // change lands on the next run rather than the one in flight.
+    static ComputeBackend backend();
+    static void setBackend (ComputeBackend);
+
+    // True when the Metal path can run on this machine — forwards to
+    // DemucsSeparator so the UI keeps talking to the engine layer. Asking for
+    // `gpu` without it is not an error: inference falls back to the CPU path.
+    static bool gpuAvailable();
 
     EngineSnapshot getSnapshot() const;
 

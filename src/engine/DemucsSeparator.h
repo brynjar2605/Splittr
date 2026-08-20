@@ -4,6 +4,7 @@
 #include <functional>
 #include <vector>
 
+#include "ComputeBackend.h"
 #include "StemCache.h" // StemIndex / stemOrderForSources
 
 namespace splittr
@@ -61,7 +62,13 @@ public:
                             const std::function<void (float, const juce::String&)>& onProgress,
                             const std::function<bool()>& shouldContinue,
                             SeparationResult& out,
-                            juce::String& error);
+                            juce::String& error,
+                            ComputeBackend backend = ComputeBackend::cpu);
+
+    // True when the Metal (MPSGraph) path can run on this machine. A gpu
+    // request when this is false is not an error — separate() falls back to
+    // the CPU path; this exists so the settings UI can say so up front.
+    static bool gpuAvailable();
 
     // Rough number of progress-callback segments inference will report
     // (7.8 s windows, 25% overlap, 2 shift passes) — for "seg i/j" UI copy.

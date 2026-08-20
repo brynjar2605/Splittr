@@ -37,9 +37,12 @@ private:
     // computed in paint
     juce::Rectangle<int> darkBounds, lightBounds, hueStripBounds, closeBounds;
     juce::Rectangle<int> fineBounds, coarseBounds;
+    juce::Rectangle<int> cpuBounds, gpuBounds;
 
     bool draggingHue = false;
-    int hoveredAction = 0; // 0 none, 1 dark, 2 light, 3 close, 4 fine, 5 coarse
+
+    // 0 none, 1 dark, 2 light, 3 close, 4 fine, 5 coarse, 6 cpu, 7 gpu
+    int hoveredAction = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsView)
 };
