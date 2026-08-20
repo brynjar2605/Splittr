@@ -31,6 +31,12 @@ CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
     return entry;
 }
 
+bool StemCache::isInsideCache (const juce::File& file)
+{
+    const auto root = cacheRoot();
+    return file == root || file.isAChildOf (root);
+}
+
 void StemCache::prune (juce::int64 maxBytes)
 {
     auto entries = cacheRoot().findChildFiles (juce::File::findDirectories, false);

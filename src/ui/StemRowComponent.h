@@ -30,6 +30,11 @@ public:
 
     static constexpr int rowHeight = 53;
 
+    // True while any row is running an external file drag. The editor checks
+    // this to refuse file drops, so a stem dragged out and released over the
+    // plugin window cannot discard the current stems (issue #8).
+    static bool isExternalDragInProgress();
+
 private:
     juce::Rectangle<int> playButtonBounds() const;
     juce::Rectangle<int> scrubberBounds() const;

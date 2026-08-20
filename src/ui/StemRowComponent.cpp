@@ -13,7 +13,17 @@ namespace
     constexpr int scrubberWidth = 60;
     constexpr int playSize = 16;
     constexpr int elapsedWidth = 26;
+
+    // Set while a row is running an external file drag. The editor refuses file
+    // drops for as long as it is set, so releasing a dragged-out stem over the
+    // plugin window cannot discard the current session.
+    bool externalDragInProgress = false;
 } // namespace
+
+bool StemRowComponent::isExternalDragInProgress()
+{
+    return externalDragInProgress;
+}
 
 StemRowComponent::StemRowComponent (juce::String displayName, bool accented)
     : name (std::move (displayName)), accent (accented)
@@ -194,8 +204,16 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
         && wavFile.existsAsFile())
     {
         draggingOut = true;
-        juce::DragAndDropContainer::performExternalDragDropOfFiles (
-            { wavFile.getFullPathName() }, false, this);
+        externalDragInProgress = true;
+
+        // The drag is asynchronous: the flag is cleared from the end-of-drag
+        // callback, which macOS delivers after the drop has been handled.
+        const auto started = juce::DragAndDropContainer::performExternalDragDropOfFiles (
+            { wavFile.getFullPathName() }, false, this,
+            [] { externalDragInProgress = false; });
+
+        if (! started)
+            externalDragInProgress = false;
     }
 }
 
