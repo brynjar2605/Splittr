@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "ui/Theme.h"
+#include "engine/MidiTranscriber.h"
 #include "engine/StemCache.h"
 
 using namespace splittr;
@@ -120,6 +121,8 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     doneView.onPlayToggle = [this] { splittrProcessor.getAudition().togglePlay (stemFiles()); };
 
     doneView.onMuteToggle = [&audition] (int stem) { audition.setMuted (stem, ! audition.isMuted (stem)); };
+
+    doneView.onMidi = [&engine] (int stem, bool force) { engine.requestMidi (stem, force); };
 
     // Seeking is how you audition a spot, so a click on a cold transport
     // starts the shared playback rather than silently moving the playhead.
@@ -295,10 +298,20 @@ void SplittrAudioProcessorEditor::exportStems()
                               const auto base = snap.sourceFile.getFileNameWithoutExtension();
 
                               for (const auto& stem : snap.stems)
+                              {
+                                  const auto name = splittr::stemFileName (base, stem.name,
+                                                                           snap.bpm, snap.key);
+
                                   if (stem.wav.existsAsFile())
-                                      stem.wav.copyFileTo (dir.getChildFile (
-                                          splittr::stemFileName (base, stem.name,
-                                                                 snap.bpm, snap.key)));
+                                      stem.wav.copyFileTo (dir.getChildFile (name));
+
+                                  // A transcribed stem exports as a pair: the
+                                  // .mid lands beside its audio under the same
+                                  // name, exactly as it sits in the cache.
+                                  if (stem.midi.existsAsFile())
+                                      stem.midi.copyFileTo (dir.getChildFile (
+                                          name.upToLastOccurrenceOf (".", false, false) + ".mid"));
+                              }
 
                               dir.revealToUser(); // confirmation: show the result in Finder
                           });
@@ -376,6 +389,17 @@ static bool applyUiPreview (splittr::EngineSnapshot& s, double clock)
         stem.name = splittr::stemName (stem.kind);
         stem.waveform = fakeWave (70, 2.0f + (float) i);
         stem.peakDb = previewPeaks[stem.kind];
+
+        // One of each MIDI chip state, so all three are inspectable side by
+        // side against the mock (drums and instrumental show none at all).
+        if (stem.kind == splittr::stemVocals)
+            stem.midiState = splittr::EngineSnapshot::MidiState::ready;
+        else if (stem.kind == splittr::stemBass)
+        {
+            stem.midiState = splittr::EngineSnapshot::MidiState::running;
+            stem.midiProgress = p;
+        }
+
         s.stems.push_back (std::move (stem));
     }
 
@@ -412,6 +436,25 @@ static bool applyUiPreview (splittr::EngineSnapshot& s, double clock)
     }
 
     return true;
+}
+
+// The engine's tri-state plus "is this a stem Basic Pitch handles at all",
+// which is what decides whether the row shows a chip in the first place.
+static splittr::StemRowComponent::MidiChip midiChipFor (const splittr::EngineSnapshot::StemInfo& stem)
+{
+    using Chip = splittr::StemRowComponent::MidiChip;
+
+    if (! splittr::MidiTranscriber::supports (stem.kind))
+        return Chip::hidden;
+
+    switch (stem.midiState)
+    {
+        case splittr::EngineSnapshot::MidiState::running: return Chip::busy;
+        case splittr::EngineSnapshot::MidiState::ready:   return Chip::done;
+        case splittr::EngineSnapshot::MidiState::none:    break;
+    }
+
+    return Chip::idle;
 }
 
 void SplittrAudioProcessorEditor::timerCallback()
@@ -510,6 +553,8 @@ void SplittrAudioProcessorEditor::timerCallback()
 
             doneView.row (i).update (stem.wav, stem.waveform, stem.peakDb,
                                      muted, playing, pos, len, animationClock);
+
+            doneView.row (i).setMidi (midiChipFor (stem), stem.midi, stem.midiProgress);
         }
     }
 }

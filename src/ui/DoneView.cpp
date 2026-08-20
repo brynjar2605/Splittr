@@ -1,5 +1,6 @@
 #include "DoneView.h"
 #include "Common.h"
+#include "engine/MidiTranscriber.h" // which stems get a MIDI chip
 
 namespace splittr
 {
@@ -48,6 +49,7 @@ void DoneView::rebuildRows (const std::vector<EngineSnapshot::StemInfo>& stems)
 
         r->onMuteToggle = [this, i] { if (onMuteToggle != nullptr) onMuteToggle (i); };
         r->onSeek = [this, i] (double f) { if (onSeek != nullptr) onSeek (i, f); };
+        r->onMidiClick = [this, i] (bool force) { if (onMidi != nullptr) onMidi (i, force); };
 
         addAndMakeVisible (r);
     }

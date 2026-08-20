@@ -26,6 +26,11 @@ struct EngineSnapshot
     double bpm = 0.0;  // 0 = undetected
     juce::String key;  // "F# MIN" etc., empty = undetected
 
+    // A stem's transcription: idle until asked for, done once the .mid is on
+    // disk beside the WAV. Detected on reopen, so a cached entry comes back
+    // with its MIDI already there (issue #19).
+    enum class MidiState { none, running, ready };
+
     struct StemInfo
     {
         int kind = stemVocals;       // StemIndex
@@ -33,6 +38,12 @@ struct EngineSnapshot
         juce::File wav;
         std::vector<float> waveform; // 70 columns
         float peakDb = -120.0f;
+
+        // Empty File until a transcription exists. `midiState` is what the row
+        // draws; `midiProgress` is only meaningful while running.
+        juce::File midi;
+        MidiState midiState = MidiState::none;
+        float midiProgress = 0.0f;
     };
 
     // Display order for the mode that produced them: five stems for the
@@ -70,6 +81,14 @@ public:
     // original source file. False when the directory is not a usable entry.
     bool openCachedEntry (const juce::File& cacheDir);
 
+    // Transcribe one stem of the current result to MIDI (issue #19). Queued on
+    // the same pool thread as everything else, so it cannot collide with a
+    // separation; a no-op for a stem that is already running, already done, or
+    // is not one Basic Pitch handles.
+    // `force` re-runs a stem whose .mid already exists (the modifier-click on a
+    // finished chip); without it a finished stem is left alone.
+    void requestMidi (int stemIndex, bool force = false);
+
     void requestCancel();
     void requestNewFile();                        // done -> idle
     void startModelDownload();
@@ -98,8 +117,10 @@ public:
 private:
     class DownloadJob;
     class SeparationJob;
+    class MidiJob;
     friend class DownloadJob;
     friend class SeparationJob;
+    friend class MidiJob;
 
     bool modelReady (Quality q) const { return models.missingFor (q).empty(); }
     bool modelReady() const { return modelReady (models.quality()); }
