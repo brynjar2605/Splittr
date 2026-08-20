@@ -12,8 +12,10 @@ namespace splittr
 // row to republish it instantly, ✕ to delete it from disk. Same overlay idiom
 // as ConfirmView — scrim, centred hairline panel, drawn in paint().
 //
-// The list is capped to what fits; the remainder is summarised as "+N OLDER"
-// rather than scrolled, which keeps the panel one readable page.
+// When the cache outgrows the panel the list wheel-scrolls, with a hairline
+// thumb on its right edge; each open starts back at the top (newest first).
+// It used to cap at one page with a "+N OLDER" line, which left the older
+// entries unreachable.
 class LibraryView : public juce::Component
 {
 public:
@@ -27,20 +29,22 @@ public:
     void refresh();
 
     void paint (juce::Graphics&) override;
+    void visibilityChanged() override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
 private:
     juce::Rectangle<int> panelBounds() const;
     juce::Rectangle<int> listBounds() const;
-    juce::Rectangle<int> rowBounds (int index) const;
+    juce::Rectangle<int> rowBounds (int index) const; // scroll-adjusted
     juce::Rectangle<int> deleteBounds (int index) const;
-    int rowCapacity() const; // rows the panel can hold
-    int rowsShown() const;   // rows actually listed (one may go to "+N OLDER")
+    int maxScroll() const; // 0 while everything fits
 
     std::vector<CacheEntry> entries;
     juce::int64 totalBytes = 0;
+    float scrollY = 0.0f; // pixels of list scrolled off the top
 
     juce::Rectangle<int> closeBounds; // computed in paint
     int hoveredRow = -1;
