@@ -10,6 +10,7 @@
 #include "ui/ConfirmView.h"
 #include "ui/SettingsView.h"
 #include "ui/LibraryView.h"
+#include "ui/TuneView.h"
 
 class SplittrAudioProcessorEditor : public juce::AudioProcessorEditor,
                                     public juce::DragAndDropContainer,
@@ -55,6 +56,7 @@ private:
     splittr::WorkingView workingView;
     splittr::DoneView doneView;
     splittr::ConfirmView confirmView;   // overlays the above while confirming
+    splittr::TuneView tuneView;         // per-stem shaping, opened from a row's mix icon
     splittr::LibraryView libraryView;   // cache browser, opened from the idle screen
     splittr::SettingsView settingsView; // prefs, opened from the header mark
 
@@ -67,6 +69,7 @@ private:
     // Overlay visibility, applied in timerCallback alongside the phase views.
     bool showSettings = false;
     bool showLibrary = false;
+    bool showTune = false; // only meaningful while the done view is up
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessorEditor)
 };

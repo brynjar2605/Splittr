@@ -6,7 +6,7 @@
 namespace splittr
 {
 
-// One draggable stem row (done state): grip dot-grid, name + peak, mute toggle
+// One draggable stem row (done state): the mix icon, name + peak, mute toggle
 // + elapsed time, waveform. Press-and-drag anywhere that isn't the transport
 // starts an external file drag of the rendered WAV.
 //
@@ -18,6 +18,12 @@ namespace splittr
 // toggles this stem's mute, and a plain click on the waveform (mouse-up under
 // 5px of travel) seeks the shared transport. Anything with real travel is still
 // the file drag-out.
+//
+// The 26px column on the left carries both halves of "mix it and drag it to
+// the DAW" (issue #9): clicking the mix icon opens the shaping panel, and
+// dragging from it — as from anywhere else on the row — hands the DAW whatever
+// resolveDragFile returns, which is the shaped bounce once the stem is no
+// longer flat. The icon turns accent to say so.
 class StemRowComponent : public juce::Component
 {
 public:
@@ -34,11 +40,24 @@ public:
     // stem that already has a .mid.
     std::function<void (bool)> onMidiClick;
 
+    // A click on the mix icon: open this stem's shaping panel (issue #9). A
+    // drag from the same place is still the file drag-out.
+    std::function<void()> onTune;
+
+    // What the drag-out should actually carry. Wired, it is asked at the
+    // moment the drag starts, so a shaped stem hands over its processed
+    // bounce; the raw render is the fallback.
+    std::function<juce::File()> resolveDragFile;
+
     void update (const juce::File& wav, const std::vector<float>& waveform, float peakDb,
                  bool isMuted, bool isPlaying, double positionSeconds, double lengthSeconds,
                  double emberClock);
 
     void setMidi (MidiChip state, const juce::File& midiFile, float progress);
+
+    // Marks the mix icon accent: this stem carries processing, so the drag
+    // carries it too.
+    void setFx (bool nonFlat);
 
     void paint (juce::Graphics&) override;
 
@@ -71,6 +90,10 @@ private:
     // chip's .mid are one gesture as far as issue #8 is concerned.
     void startFileDrag (const juce::File&);
 
+    // The row's own drag: resolves the payload first, then hands it over.
+    void startStemDrag();
+
+    juce::Rectangle<int> gripBounds() const;
     juce::Rectangle<int> muteButtonBounds() const;
     juce::Rectangle<int> midiChipBounds() const; // empty while hidden
     juce::Rectangle<int> waveformBounds() const;
@@ -94,13 +117,18 @@ private:
     juce::File midiFile;
     float midiProgress = 0.0f;
 
+    bool fxNonFlat = false;
+
     bool hovered = false;
     bool midiHovered = false;
+    bool gripHovered = false;
     bool draggingOut = false;
 
     // Which control the press landed on, so a gesture that starts on the chip
-    // never becomes the row's WAV drag.
+    // never becomes the row's WAV drag, and one that starts on the mix icon
+    // only opens the panel when it never travelled.
     bool pressedMidi = false;
+    bool pressedGrip = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemRowComponent)
 };

@@ -40,6 +40,16 @@ public:
     // whose .mid already exists.
     std::function<void (int, bool)> onMidi;
 
+    // A click on a row's mix icon: open that stem's shaping panel (issue #9).
+    std::function<void (int)> onTune;
+
+    // What a row's drag-out should carry — the editor answers with the shaped
+    // bounce for a stem that has processing, and the raw render otherwise.
+    std::function<juce::File (int)> resolveStemFile;
+
+    // The same question for DRAG ALL, asked once as the drag starts.
+    std::function<juce::StringArray()> resolveAllFiles;
+
     void update (const EngineSnapshot&, bool isPlaying);
 
     void paint (juce::Graphics&) override;
