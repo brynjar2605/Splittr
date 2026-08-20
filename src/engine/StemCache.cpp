@@ -37,6 +37,48 @@ bool StemCache::isInsideCache (const juce::File& file)
     return file == root || file.isAChildOf (root);
 }
 
+std::vector<CacheEntry> StemCache::enumerate()
+{
+    std::vector<CacheEntry> entries;
+
+    for (const auto& dir : cacheRoot().findChildFiles (juce::File::findDirectories, false))
+    {
+        auto xml = juce::parseXML (dir.getChildFile ("meta.xml"));
+
+        if (xml == nullptr)
+            continue; // half-written, or not one of ours
+
+        CacheEntry entry;
+        entry.dir = dir;
+        entry.sourcePath = xml->getStringAttribute ("sourcePath");
+
+        // createFileWithoutCheckingPath: the source may be long gone, and a
+        // missing file is not a reason to hide the stems we already have.
+        entry.sourceName = entry.sourcePath.isNotEmpty()
+                               ? juce::File::createFileWithoutCheckingPath (entry.sourcePath)
+                                     .getFileName()
+                               : dir.getFileName();
+
+        entry.duration = xml->getDoubleAttribute ("duration");
+        entry.bpm = xml->getDoubleAttribute ("bpm");
+        entry.key = xml->getStringAttribute ("key");
+        entry.quality = xml->getStringAttribute ("quality");
+        entry.modified = dir.getLastModificationTime();
+
+        // Everything in the directory: the stem count varies with the engine
+        // mode, and stray sidecars (.asd) are still occupying the disk.
+        for (const auto& file : dir.findChildFiles (juce::File::findFiles, false))
+            entry.bytes += file.getSize();
+
+        entries.push_back (std::move (entry));
+    }
+
+    std::sort (entries.begin(), entries.end(),
+               [] (const CacheEntry& a, const CacheEntry& b) { return a.modified > b.modified; });
+
+    return entries;
+}
+
 void StemCache::prune (juce::int64 maxBytes)
 {
     auto entries = cacheRoot().findChildFiles (juce::File::findDirectories, false);

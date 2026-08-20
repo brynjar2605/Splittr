@@ -4,6 +4,16 @@
 namespace splittr
 {
 
+namespace
+{
+    constexpr int padX = 16;
+    constexpr int topRowY = 14;              // ENGINE row
+    constexpr int bottomRowHeight = 13;      // LIBRARY row
+    constexpr int bottomRowInset = 14;       // its distance from the bottom edge
+    constexpr int panelTop = 44;             // below the ENGINE row
+    constexpr int panelBottomInset = 35;     // above the LIBRARY row
+} // namespace
+
 IdleDropView::IdleDropView()
 {
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
@@ -36,102 +46,31 @@ void IdleDropView::setQuality (Quality q)
     }
 }
 
-std::pair<juce::Rectangle<int>, juce::Rectangle<int>>
-IdleDropView::drawSwitch (juce::Graphics& g, int x, int y, const juce::String& a,
-                          const juce::String& b, bool bActive, int hoverIdA, int hoverIdB,
-                          int cellWidth) const
-{
-    constexpr int cellH = 22;
-
-    const juce::Rectangle<int> aBounds (x, y, cellWidth, cellH);
-    const juce::Rectangle<int> bBounds (x + cellWidth, y, cellWidth, cellH);
-
-    g.setColour (theme::accentTint15);
-    g.fillRect (bActive ? bBounds : aBounds);
-
-    g.setColour (theme::lineStrong);
-    g.drawRect (juce::Rectangle<int> (x, y, cellWidth * 2, cellH), 1);
-    g.fillRect (x + cellWidth, y + 1, 1, cellH - 2); // divider
-
-    g.setFont (theme::mono (9.5f, 0.1f));
-    g.setColour (! bActive ? theme::accentSoft
-                           : (hoveredOption == hoverIdA ? theme::text60 : theme::text40));
-    g.drawText (a, aBounds, juce::Justification::centred);
-
-    g.setColour (bActive ? theme::accentSoft
-                         : (hoveredOption == hoverIdB ? theme::text60 : theme::text40));
-    g.drawText (b, bBounds, juce::Justification::centred);
-
-    return { aBounds, bBounds };
-}
-
 void IdleDropView::paint (juce::Graphics& g)
 {
-    const auto labelFont = theme::mono (8.5f, 0.12f);
-
-    const auto drawLabel = [&] (const juce::String& label, int x, int y)
-    {
-        g.setFont (labelFont);
-        g.setColour (theme::text35);
-        g.drawText (label, x, y, (int) ui::textWidth (labelFont, label) + 2, 22,
-                    juce::Justification::centredLeft);
-        return x + (int) ui::textWidth (labelFont, label) + 12;
-    };
-
     // --- ENGINE toggle row above the drop panel ---
     {
-        const auto x = drawLabel ("ENGINE", 16, 14);
+        const auto x = ui::drawFieldLabel (g, "ENGINE", padX, topRowY);
+
         std::tie (fastBounds, bestBounds) =
-            drawSwitch (g, x, 14, "FAST", "BEST", quality == Quality::best, 1, 2, 54);
+            ui::drawSwitch (g, x, topRowY, "FAST", "BEST", quality == Quality::best,
+                            hoveredOption, 1, 2, 54);
 
         g.setFont (theme::mono (8.0f, 0.08f));
         g.setColour (theme::text35);
         g.drawText (quality == Quality::fast
                         ? juce::String::fromUTF8 ("htdemucs \xc2\xb7 about realtime")
                         : juce::String::fromUTF8 ("fine-tuned \xc3\x97 4 \xc2\xb7 best quality \xc2\xb7 ~4\xc3\x97 slower"),
-                    juce::Rectangle<int> (0, 14, getWidth() - 16, 22),
+                    juce::Rectangle<int> (0, topRowY, getWidth() - padX, ui::switchHeight),
                     juce::Justification::centredRight);
     }
 
-    // --- THEME switch / ACCENT hue strip below the drop panel ---
-    {
-        const auto y = getHeight() - 14 - 22;
-
-        const auto x1 = drawLabel ("THEME", 16, y);
-        std::tie (darkBounds, lightBounds) =
-            drawSwitch (g, x1, y, "DARK", "LIGHT", theme::currentMode() == theme::Mode::light,
-                        3, 4, 54);
-
-        // hue strip: full spectrum, click or drag to pick the accent colour
-        constexpr int stripW = 168;
-        const auto accentLabelX = getWidth() - 16 - stripW
-                                  - ((int) ui::textWidth (labelFont, "ACCENT") + 12);
-        const auto x2 = drawLabel ("ACCENT", accentLabelX, y);
-
-        hueStripBounds = { x2, y, stripW, 22 };
-
-        const auto sat = 0.72f;
-        const auto bri = theme::currentMode() == theme::Mode::dark ? 0.92f : 0.80f;
-
-        for (int i = 0; i < stripW; ++i)
-        {
-            g.setColour (juce::Colour::fromHSV ((float) i / (float) stripW, sat, bri, 1.0f));
-            g.fillRect (hueStripBounds.getX() + i, y + 1, 1, 20);
-        }
-
-        g.setColour (theme::lineStrong);
-        g.drawRect (hueStripBounds, 1);
-
-        // marker at the current hue
-        const auto markerX = hueStripBounds.getX()
-                             + (int) (theme::currentAccentHue() * (float) stripW);
-        g.setColour (theme::bg);
-        g.fillRect (markerX - 2, y - 2, 5, 26);
-        g.setColour (theme::accentMid);
-        g.fillRect (markerX - 1, y - 2, 3, 26);
-    }
-
-    auto panel = getLocalBounds().withTrimmedTop (30).withTrimmedBottom (30).reduced (16, 14).toFloat();
+    // The panel fills everything between the two rows.
+    auto panel = getLocalBounds()
+                     .reduced (padX, 0)
+                     .withTop (panelTop)
+                     .withBottom (getHeight() - panelBottomInset)
+                     .toFloat();
 
     g.setColour (theme::accentTint5);
     g.fillRect (panel);
@@ -172,53 +111,29 @@ void IdleDropView::paint (juce::Graphics& g)
                     juce::Justification::centred);
     }
 
-}
-
-void IdleDropView::sendHue (const juce::MouseEvent& e, bool commit)
-{
-    if (onAccentHueChange != nullptr)
-        onAccentHueChange (juce::jlimit (0.0f, 1.0f,
-                                         (float) (e.x - hueStripBounds.getX())
-                                             / (float) hueStripBounds.getWidth()),
-                           commit);
-}
-
-void IdleDropView::mouseDown (const juce::MouseEvent& e)
-{
-    draggingHue = hueStripBounds.contains (e.getPosition());
-
-    if (draggingHue)
-        sendHue (e, false);
-}
-
-void IdleDropView::mouseDrag (const juce::MouseEvent& e)
-{
-    if (draggingHue)
-        sendHue (e, false);
+    // --- LIBRARY: everything ever split, straight out of the stem cache ---
+    libraryBounds = ui::drawTextAction (g, "LIBRARY", padX,
+                                        getHeight() - bottomRowInset - bottomRowHeight,
+                                        bottomRowHeight, hoveredOption == 3);
 }
 
 void IdleDropView::mouseUp (const juce::MouseEvent& e)
 {
-    if (draggingHue)
-    {
-        sendHue (e, true); // commit -> persisted
-        draggingHue = false;
-        return;
-    }
-
     const auto p = e.getPosition();
 
     if (fastBounds.contains (p) || bestBounds.contains (p))
     {
         if (onQualityChange != nullptr)
             onQualityChange (fastBounds.contains (p) ? Quality::fast : Quality::best);
+
         return;
     }
 
-    if (darkBounds.contains (p) || lightBounds.contains (p))
+    if (libraryBounds.contains (p))
     {
-        if (onModeChange != nullptr)
-            onModeChange (darkBounds.contains (p) ? theme::Mode::dark : theme::Mode::light);
+        if (onLibrary != nullptr)
+            onLibrary();
+
         return;
     }
 
@@ -230,11 +145,10 @@ void IdleDropView::mouseMove (const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
 
-    const auto option = fastBounds.contains (p) ? 1
-                        : bestBounds.contains (p) ? 2
-                        : darkBounds.contains (p) ? 3
-                        : lightBounds.contains (p) ? 4
-                                                   : 0;
+    const auto option = fastBounds.contains (p)      ? 1
+                        : bestBounds.contains (p)    ? 2
+                        : libraryBounds.contains (p) ? 3
+                                                     : 0;
     if (option != hoveredOption)
     {
         hoveredOption = option;

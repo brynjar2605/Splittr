@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 #include <array>
+#include <vector>
 #include "ModelManager.h" // Quality
 
 namespace splittr
@@ -33,6 +34,22 @@ struct CachedStems
     }
 };
 
+// A library row: everything the cache knows about one previous split, read
+// from its meta.xml alone — the source file may have moved or been deleted
+// since, and the entry has to stay browsable and re-openable either way.
+struct CacheEntry
+{
+    juce::File dir;
+    juce::String sourcePath;  // as recorded at split time; may no longer exist
+    juce::String sourceName;  // filename portion of sourcePath
+    double duration = 0.0;    // seconds
+    double bpm = 0.0;         // 0 = undetected
+    juce::String key;         // "F# MIN" etc., empty = undetected
+    juce::String quality;     // raw meta attribute ("fast" / "best" / …)
+    juce::Time modified;      // directory mtime — the date column
+    juce::int64 bytes = 0;    // everything in the directory
+};
+
 // Rendered stems live in Application Support (never /tmp): Ableton references
 // dragged files by path, so they must survive reboots and cache cleaners.
 class StemCache
@@ -51,9 +68,15 @@ public:
     // the editor refuses those drops.
     static bool isInsideCache (const juce::File& file);
 
-    // Delete oldest entries until the cache is under maxBytes.
+    // Every readable entry under cacheRoot(), newest first — the library list.
+    // Cheap: one directory scan plus a small XML parse per entry.
+    static std::vector<CacheEntry> enumerate();
+
     // (5 float32 stems ~ 370 MB for a 4-minute song, so allow a few songs.)
-    static void prune (juce::int64 maxBytes = (juce::int64) 4 * 1024 * 1024 * 1024);
+    static constexpr juce::int64 defaultMaxBytes = (juce::int64) 4 * 1024 * 1024 * 1024;
+
+    // Delete oldest entries until the cache is under maxBytes.
+    static void prune (juce::int64 maxBytes = defaultMaxBytes);
 };
 
 } // namespace splittr

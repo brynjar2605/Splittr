@@ -499,6 +499,70 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
     return true;
 }
 
+bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
+{
+    // Deliberately not tryPublishCached: that re-derives the cache key from the
+    // source file's current size/mtime, so an entry whose source has moved or
+    // been deleted would never open. The meta holds everything we need.
+    auto xml = juce::parseXML (cacheDir.getChildFile ("meta.xml"));
+
+    if (xml == nullptr || xml->getIntAttribute ("version") < 3)
+        return false;
+
+    std::array<juce::File, numStems> wavs;
+    int found = 0;
+
+    for (int i = 0; i < numStems; ++i)
+    {
+        wavs[(size_t) i] = cacheDir.getChildFile (juce::String (stemName (i)) + ".wav");
+
+        if (wavs[(size_t) i].existsAsFile())
+            ++found;
+    }
+
+    if (found == 0)
+        return false; // stems gone: nothing to reopen
+
+    const auto gen = generation.fetch_add (1) + 1;
+
+    pool.removeAllJobs (true, 0);
+
+    mutate (gen, [&] (EngineSnapshot& s)
+    {
+        s = EngineSnapshot {};
+        s.quality = models.quality(); // the engine's setting, not the entry's
+        s.phase = Phase::Ready;
+        s.progress = 1.0f;
+
+        // Existence is not required — the stems are what the session needs.
+        s.sourceFile = juce::File::createFileWithoutCheckingPath (
+            xml->getStringAttribute ("sourcePath"));
+
+        s.sourceDuration = xml->getDoubleAttribute ("duration");
+        s.sourceWaveform = metaUncsv (xml->getStringAttribute ("sourceWave"));
+
+        for (int i = 0; i < numStems; ++i)
+        {
+            const juce::String name (stemName (i));
+
+            s.stems[(size_t) i].wav = wavs[(size_t) i];
+            s.stems[(size_t) i].waveform = metaUncsv (xml->getStringAttribute ("wave" + name));
+            s.stems[(size_t) i].peakDb = (float) xml->getDoubleAttribute ("peak" + name, -120.0);
+        }
+
+        // source order drums,bass,other,vocals for the working table
+        s.sourcePeaksDb = { s.stems[stemDrums].peakDb, s.stems[stemBass].peakDb,
+                            s.stems[stemOther].peakDb, s.stems[stemVocals].peakDb };
+        s.peaksKnown = true;
+        s.inferenceSeconds = xml->getDoubleAttribute ("inferenceSeconds");
+        s.realtimeFactor = xml->getDoubleAttribute ("realtimeFactor");
+        s.bpm = xml->getDoubleAttribute ("bpm");
+        s.key = xml->getStringAttribute ("key");
+    });
+
+    return true;
+}
+
 void SeparationEngine::requestSeparation (const juce::File& file)
 {
     const auto gen = generation.fetch_add (1) + 1;

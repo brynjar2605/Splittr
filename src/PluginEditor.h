@@ -8,6 +8,8 @@
 #include "ui/WorkingView.h"
 #include "ui/DoneView.h"
 #include "ui/ConfirmView.h"
+#include "ui/SettingsView.h"
+#include "ui/LibraryView.h"
 
 class SplittrAudioProcessorEditor : public juce::AudioProcessorEditor,
                                     public juce::DragAndDropContainer,
@@ -52,13 +54,19 @@ private:
     splittr::DownloadView downloadView;
     splittr::WorkingView workingView;
     splittr::DoneView doneView;
-    splittr::ConfirmView confirmView; // overlays the above while confirming
+    splittr::ConfirmView confirmView;   // overlays the above while confirming
+    splittr::LibraryView libraryView;   // cache browser, opened from the idle screen
+    splittr::SettingsView settingsView; // prefs, opened from the header mark
 
     std::unique_ptr<juce::FileChooser> chooser;
     double animationClock = 0.0;
 
     // Set while the confirmation overlay is up; empty otherwise.
     juce::File pendingFile;
+
+    // Overlay visibility, applied in timerCallback alongside the phase views.
+    bool showSettings = false;
+    bool showLibrary = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessorEditor)
 };

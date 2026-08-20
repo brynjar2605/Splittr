@@ -43,6 +43,8 @@ target_sources(Splittr PRIVATE
     src/ui/StemRowComponent.cpp
     src/ui/DoneView.cpp
     src/ui/ConfirmView.cpp
+    src/ui/SettingsView.cpp
+    src/ui/LibraryView.cpp
     src/engine/AudioFileIO.cpp
     src/engine/DemucsSeparator.cpp
     src/engine/SeparationEngine.cpp

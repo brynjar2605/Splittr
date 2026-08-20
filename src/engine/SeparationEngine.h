@@ -59,6 +59,12 @@ public:
 
     void editorOpened();                          // auto-start first-run model download
     void requestSeparation (const juce::File&);   // cancels any running job first
+
+    // Reopen a cache directory chosen in the library: publishes Ready straight
+    // from its meta.xml + stem WAVs, without consulting (or needing) the
+    // original source file. False when the directory is not a usable entry.
+    bool openCachedEntry (const juce::File& cacheDir);
+
     void requestCancel();
     void requestNewFile();                        // done -> idle
     void startModelDownload();
