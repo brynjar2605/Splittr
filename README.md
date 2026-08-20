@@ -55,6 +55,15 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   expect them to bleed — the other five stems are also slightly weaker than
   FAST's. Each mode caches separately, so switching never re-runs a mode you
   have already used on that file.
+- **Playback** (done screen): all stems play in sync through one transport —
+  the circular button in the footer starts and pauses everything, each row's
+  circle mutes/unmutes that stem (muted rows dim), and clicking anywhere on a
+  waveform jumps there. Audible stems "burn" behind the playhead with the
+  same ember effect as the loading bar.
+- **LIBRARY** (idle screen, bottom left) lists every song you've split —
+  duration, BPM/key, engine mode — and reopens any of them instantly, even if
+  the original audio file has since moved or been deleted. Entries can be
+  deleted individually; the footer shows total cache size.
 - **DRAG ALL** (done screen, left of the footer) drags every stem out at once.
   Ableton makes one track per file, so a whole stem session lands in the set in
   a single gesture. Dragging a single row still drags just that stem.
@@ -64,11 +73,16 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   `<song> - <Stem> - 124BPM - F#m.wav`, and carry the same values in their
   WAV LIST/INFO metadata. Whatever came back undetected is simply left out, so
   a rubato track gets no BPM part and an atonal one no key part.
-- **THEME / ACCENT** (idle screen): dark or light UI, plus a full-spectrum
-  hue strip — click or drag to recolor every accent in the plugin live.
-  Preferences are global and persist.
-- BPM/key detection is a hint (onset autocorrelation + chromagram): reliable
-  on steady-tempo tonal material, approximate on rubato or atonal tracks.
+- **SETTINGS** (the mark at the header's right, reachable from any state):
+  dark or light THEME, a full-spectrum ACCENT hue strip — click or drag to
+  recolor every accent in the plugin live — and the FIRE grain of the burn
+  effect (fine matrix cells or the original coarse bars). Preferences are
+  global and persist.
+- **BPM** comes from a multi-band onset/tempogram detector with octave
+  disambiguation, validated to ±2% on steady-tempo material; when the pulse
+  is too ambiguous (rubato, free time) it reports nothing rather than a
+  number you shouldn't trust. **Key** (chromagram) remains a hint — best on
+  steady tonal music.
 - Input: wav / aiff / mp3 / flac / m4a / ogg, up to 10 minutes (v1 limit).
 - Separation runs at very roughly realtime speed on Apple Silicon — a 4-minute
   song takes a few minutes. Live keeps playing; the work happens on a
