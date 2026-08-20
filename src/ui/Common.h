@@ -109,6 +109,71 @@ drawSwitchCells (juce::Graphics& g, int x, int y, const juce::StringArray& label
     return cells;
 }
 
+// The switch idiom shrunk to a panel's header row: 15px hairline cells at
+// 8.5px mono, same dimmed-to-bright hover roll, same accent tint on the active
+// one. Cell n answers to hover id hoverIdBase + n.
+//
+// Unlike drawSwitchCells this hands nothing back, because its caller repaints
+// at 30 Hz and a vector of bounds per frame is a heap allocation per frame:
+// the cell rect is x + n * cellWidth, which the host works out for itself.
+constexpr int miniCellHeight = 15;
+
+inline void drawMiniCells (juce::Graphics& g, int x, int y, const juce::StringArray& labels,
+                           int activeIndex, int hovered, int hoverIdBase, int cellWidth,
+                           int height = miniCellHeight)
+{
+    const auto cellAt = [x, y, cellWidth, height] (int i)
+    {
+        return juce::Rectangle<int> (x + i * cellWidth, y, cellWidth, height);
+    };
+
+    if (juce::isPositiveAndBelow (activeIndex, labels.size()))
+    {
+        g.setColour (theme::accentTint15);
+        g.fillRect (cellAt (activeIndex));
+    }
+
+    g.setColour (theme::lineSoft15);
+    g.drawRect (juce::Rectangle<int> (x, y, cellWidth * labels.size(), height), 1);
+
+    for (int i = 1; i < labels.size(); ++i)
+        g.fillRect (x + i * cellWidth, y + 1, 1, height - 2); // dividers
+
+    g.setFont (theme::mono (8.5f, 0.1f));
+
+    for (int i = 0; i < labels.size(); ++i)
+    {
+        g.setColour (i == activeIndex             ? theme::accentSoft
+                     : hovered == hoverIdBase + i ? theme::text60
+                                                  : theme::text40);
+
+        g.drawText (labels[i], cellAt (i), juce::Justification::centred);
+    }
+}
+
+// A single hairline cell that is either on or off (FREEZE, PHASE, SOLO…).
+inline juce::Rectangle<int>
+drawMiniToggle (juce::Graphics& g, int x, int y, const juce::String& label,
+                bool on, bool hovered, int width, int height = miniCellHeight)
+{
+    const juce::Rectangle<int> r (x, y, width, height);
+
+    if (on)
+    {
+        g.setColour (theme::accentTint15);
+        g.fillRect (r);
+    }
+
+    g.setColour (on ? theme::accentTint40 : theme::lineSoft15);
+    g.drawRect (r, 1);
+
+    g.setColour (on ? theme::accentSoft : (hovered ? theme::text60 : theme::text40));
+    g.setFont (theme::mono (8.5f, 0.1f));
+    g.drawText (label, r, juce::Justification::centred);
+
+    return r;
+}
+
 // Index of the cell containing p, or -1.
 inline int cellAt (const std::vector<juce::Rectangle<int>>& cells, juce::Point<int> p)
 {
