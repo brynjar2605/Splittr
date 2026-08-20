@@ -32,6 +32,8 @@ def truth_from_name(name):
 def verdict(truth, got):
     if truth is None:
         return '', ''
+    if truth == 0.0:                       # arrhythmic: reporting nothing is right
+        return ('ok', 'rejected') if got <= 0 else ('FAIL', 'should reject')
     if got <= 0:
         return 'FAIL', 'no tempo'
     err = (got - truth) / truth

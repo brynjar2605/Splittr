@@ -236,6 +236,74 @@ def pattern_bassline(buf, bpm):
             sine_note(buf, root * mult, t0, 4 * beat, 0.055)
 
 
+def pattern_human(buf, bpm):
+    """Backbeat played by hand: timing jitter and velocity variation."""
+    beat = 60.0 / bpm
+    jitter = lambda: random.gauss(0.0, 0.008)          # ~8 ms, like a drummer
+    vel = lambda: 0.75 + 0.45 * random.random()
+    for bar in range(int(DURATION / (beat * 4)) + 1):
+        t0 = bar * 4 * beat
+        for b in (0.0, 2.0):
+            mix(buf, KICK, t0 + b * beat + jitter(), vel())
+        for b in (1.0, 3.0):
+            mix(buf, SNARE, t0 + b * beat + jitter(), vel())
+        for i in range(8):
+            mix(buf, HAT_C, t0 + i * 0.5 * beat + jitter(),
+                vel() * (1.0 if i % 2 == 0 else 0.7))
+
+
+def pattern_drift(buf, bpm):
+    """Backbeat whose tempo breathes +-2% — no click track."""
+    beats, t, k = [], 0.0, 0
+    while t < DURATION + 4.0:
+        beats.append(t)
+        t += 60.0 / (bpm * (1.0 + 0.02 * math.sin(2.0 * math.pi * t / 11.0)))
+        k += 1
+
+    def at(x):                                          # fractional beat index
+        i = int(x)
+        if i + 1 >= len(beats):
+            return DURATION + 1.0
+        return beats[i] + (x - i) * (beats[i + 1] - beats[i])
+
+    for bar in range(len(beats) // 4):
+        b0 = bar * 4
+        for b in (0, 2):
+            mix(buf, KICK, at(b0 + b))
+        for b in (1, 3):
+            mix(buf, SNARE, at(b0 + b))
+        for i in range(8):
+            mix(buf, HAT_C, at(b0 + i * 0.5), 1.0 if i % 2 == 0 else 0.7)
+
+
+def pattern_rubato(buf, _bpm):
+    """Free-time chords, no pulse at all — must come back with no tempo."""
+    t = 0.0
+    while t < DURATION:
+        root = BASS_SCALE[random.randrange(len(BASS_SCALE))] * 2.0
+        dur = random.uniform(0.55, 1.9)
+        for mult in (1.0, 1.25, 1.5, 2.0):
+            sine_note(buf, root * mult, t, dur * 1.1, 0.16, decay=1.2)
+        t += dur
+
+
+def pattern_noise(buf, _bpm):
+    """Slow filtered-noise swells — energy, no rhythm."""
+    n = len(buf)
+    src = one_pole_lp(one_pole_hp(noise(n), 200.0), 4000.0)
+    t = 0.0
+    while t < DURATION:
+        start = int(t * SR)
+        length = int(random.uniform(1.5, 3.5) * SR)
+        for i in range(length):
+            j = start + i
+            if j >= n:
+                break
+            e = math.sin(math.pi * i / length) ** 2
+            buf[j] += src[j] * e * 0.6
+        t += random.uniform(1.0, 2.5)
+
+
 PATTERNS = {
     'basic': pattern_basic,
     'swing': pattern_swing,
@@ -243,6 +311,10 @@ PATTERNS = {
     'busy': pattern_busy,
     'ride': pattern_ride,
     'bassline': pattern_bassline,
+    'human': pattern_human,
+    'drift': pattern_drift,
+    'rubato': pattern_rubato,
+    'noise': pattern_noise,
 }
 
 CASES = [
@@ -253,6 +325,8 @@ CASES = [
     ('busy', 150.0), ('busy', 105.0),
     ('ride', 82.0),
     ('bassline', 112.0), ('bassline', 160.0),
+    ('human', 92.0), ('drift', 118.0),
+    ('rubato', 0.0), ('noise', 0.0),   # 0 = must report no tempo at all
 ]
 
 
