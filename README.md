@@ -95,17 +95,21 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   a rubato track gets no BPM part and an atonal one no key part.
 - **SETTINGS** (the mark at the header's right, reachable from any state):
   dark or light THEME, a full-spectrum ACCENT hue strip — click or drag to
-  recolor every accent in the plugin live — and the FIRE grain of the burn
-  effect (fine matrix cells or the original coarse bars). Preferences are
-  global and persist.
+  recolor every accent in the plugin live — the FIRE grain of the burn
+  effect (fine matrix cells or the original coarse bars), and PROCESSING,
+  which runs separation on the CPU or on the Apple Silicon GPU (Metal, greyed
+  out where it isn't available, and falling back to the CPU for any run it
+  can't take). Preferences are global and persist.
 - **BPM** comes from a multi-band onset/tempogram detector with octave
   disambiguation, validated to ±2% on steady-tempo material; when the pulse
   is too ambiguous (rubato, free time) it reports nothing rather than a
   number you shouldn't trust. **Key** (chromagram) remains a hint — best on
   steady tonal music.
 - Input: wav / aiff / mp3 / flac / m4a / ogg, up to 10 minutes (v1 limit).
-- Separation runs at very roughly realtime speed on Apple Silicon — a 4-minute
-  song takes a few minutes. Live keeps playing; the work happens on a
+- Separation speed follows the PROCESSING setting: on the GPU (Apple Silicon,
+  macOS 14+) it runs at roughly 15-20x realtime — a 4-minute song in well
+  under half a minute — and on the CPU at very roughly realtime, a few minutes
+  for the same song. Either way Live keeps playing; the work happens on a
   low-priority background thread and survives closing the plugin window.
 - Rendered stems are 32-bit float 44.1 kHz WAVs cached in
   `~/Library/Application Support/Splittr/cache/` so drags keep working after

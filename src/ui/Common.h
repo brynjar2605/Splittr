@@ -70,9 +70,13 @@ constexpr int switchHeight = 22;
 // Segmented switch of any width: draws [a|b|…] at (x, y) and returns one
 // bounds per cell. Cell n answers to hover id hoverIdBase + n against the
 // host's current `hovered` id for the dimmed-to-bright roll.
+//
+// `disabledIndex` fades one cell to a choice this machine cannot make (the GPU
+// cell without Metal); the host is what actually refuses the click.
 inline std::vector<juce::Rectangle<int>>
 drawSwitchCells (juce::Graphics& g, int x, int y, const juce::StringArray& labels,
-                 int activeIndex, int hovered, int hoverIdBase, int cellWidth)
+                 int activeIndex, int hovered, int hoverIdBase, int cellWidth,
+                 int disabledIndex = -1)
 {
     std::vector<juce::Rectangle<int>> cells;
 
@@ -95,8 +99,10 @@ drawSwitchCells (juce::Graphics& g, int x, int y, const juce::StringArray& label
 
     for (int i = 0; i < labels.size(); ++i)
     {
-        g.setColour (i == activeIndex ? theme::accentSoft
-                                      : (hovered == hoverIdBase + i ? theme::text60 : theme::text40));
+        const auto colour = i == activeIndex ? theme::accentSoft
+                                             : (hovered == hoverIdBase + i ? theme::text60 : theme::text40);
+
+        g.setColour (i == disabledIndex ? colour.withMultipliedAlpha (0.4f) : colour);
         g.drawText (labels[i], cells[(size_t) i], juce::Justification::centred);
     }
 

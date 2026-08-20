@@ -488,6 +488,8 @@ public:
 
         SeparationResult result;
 
+        // Read here, not at construction: flipping PROCESSING applies to the
+        // next run, the same contract the quality switch has.
         const auto status = DemucsSeparator::separate (
             engine.models.filesFor (quality),
             decoded.buffer,
@@ -508,7 +510,8 @@ public:
             },
             [this] { return ! shouldExit(); },
             result,
-            error);
+            error,
+            SeparationEngine::backend());
 
         if (status == DemucsSeparator::Status::cancelled || shouldExit())
             return jobHasFinished; // requestCancel already published Idle
@@ -820,6 +823,39 @@ void SeparationEngine::setQuality (Quality q)
     {
         startModelDownload();
     }
+}
+
+namespace
+{
+    // The PROCESSING setting, mirrored in memory: the settings row reads it on
+    // every paint, and Settings.xml is not a file to parse at 30 Hz. Read from
+    // disk once, on first use; written through on every change — the same
+    // load-once/write-through shape the theme prefs have.
+    std::atomic<ComputeBackend>& backendSetting()
+    {
+        static std::atomic<ComputeBackend> value {
+            ModelManager::getUiSetting ("processing", "cpu") == "gpu" ? ComputeBackend::gpu
+                                                                     : ComputeBackend::cpu
+        };
+
+        return value;
+    }
+} // namespace
+
+ComputeBackend SeparationEngine::backend()
+{
+    return backendSetting().load();
+}
+
+void SeparationEngine::setBackend (ComputeBackend b)
+{
+    backendSetting() = b;
+    ModelManager::setUiSetting ("processing", b == ComputeBackend::gpu ? "gpu" : "cpu");
+}
+
+bool SeparationEngine::gpuAvailable()
+{
+    return DemucsSeparator::gpuAvailable();
 }
 
 bool SeparationEngine::hasCachedResult (const juce::File& source) const
