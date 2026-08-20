@@ -1,6 +1,9 @@
 #pragma once
 
 #include <juce_gui_basics/juce_gui_basics.h>
+#include <vector>
+
+#include "Ember.h"
 
 namespace splittr
 {
@@ -21,15 +24,8 @@ public:
     static constexpr int barHeight = rows * 2 + (rows - 1); // 20px
 
 private:
-    struct Cell
-    {
-        float baseAlpha; // 0.3 - 1.0
-        float period;    // 0.34 - 1.24 s
-        float phase;     // 0 - 1
-    };
-
     const int columns;
-    std::vector<Cell> cells;
+    std::vector<ui::Ember> cells;
     double clock = 0.0;
     float progress = 0.0f;
 

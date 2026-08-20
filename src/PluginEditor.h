@@ -37,6 +37,8 @@ private:
     void requestSeparationFor (const juce::File&);
     void startSeparation (juce::File); // by value: the confirm path passes pendingFile
 
+    splittr::AuditionPlayer::StemFiles stemFiles() const; // current snapshot's five WAVs
+
     static bool isSupportedAudioFile (const juce::String& path);
 
     SplittrAudioProcessor& splittrProcessor;
