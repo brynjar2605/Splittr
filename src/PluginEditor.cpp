@@ -163,6 +163,23 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
 
     tuneView.onClose = [this] { showTune = false; };
 
+    // The live spectrum behind the EQ curve (issue #25): the panel pulls the
+    // tapped stem's pre/post frames each repaint; the timer below points the
+    // tap at whichever stem the panel is showing, and parks it otherwise.
+    tuneView.spectrumSource = [&audition] (splittr::SpectrumFrame& f)
+    {
+        splittr::AuditionPlayer::SpectrumFrames s;
+
+        if (! audition.readSpectrum (s))
+            return false;
+
+        f.pre = s.pre;
+        f.post = s.post;
+        f.hasPre = s.hasPre;
+        f.hasPost = s.hasPost;
+        return true;
+    };
+
     // What actually leaves the plugin: the bounced tuned file when a stem is
     // shaped, the raw render when it is flat.
     doneView.resolveStemFile = [&engine] (int stem) { return engine.processedStemFile (stem); };
@@ -209,7 +226,12 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     engine.editorOpened();
 }
 
-SplittrAudioProcessorEditor::~SplittrAudioProcessorEditor() = default;
+SplittrAudioProcessorEditor::~SplittrAudioProcessorEditor()
+{
+    // The tap outlives the editor inside the processor; park it so a closed
+    // window doesn't keep the audio thread computing spectra nobody reads.
+    splittrProcessor.getAudition().setSpectrumStem (-1);
+}
 
 void SplittrAudioProcessorEditor::paint (juce::Graphics& g)
 {
@@ -582,6 +604,11 @@ void SplittrAudioProcessorEditor::timerCallback()
     doneView.setVisible (showDone);
     confirmView.setVisible (confirming);
     tuneView.setVisible (showTune);
+
+    // One authoritative line rather than calls sprinkled over every open and
+    // close path: whatever hid or showed the panel this tick, the spectrum tap
+    // follows it. An atomic store per frame costs nothing (issue #25).
+    audition.setSpectrumStem (showTune ? tuneView.currentStem() : -1);
     libraryView.setVisible (showLibrary);
     settingsView.setVisible (showSettings);
 

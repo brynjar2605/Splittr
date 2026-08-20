@@ -86,6 +86,18 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   seconds (a 2½-minute stem, about 2). Transcriptions live beside their stems
   in the cache, so reopening a session finds them already done;
   cmd-click a finished chip to run it again.
+- **TUNE** (done screen, the mix icon on a stem row's left edge) opens the
+  stem's shaping panel: an interactive parametric EQ — up to 24 bands of any
+  shape (bells, shelves, cuts to 96 dB/oct, notch, band-pass, tilts,
+  all-pass), each optionally dynamic (gain rides the band's own level, with
+  attack/release) — drawn over a live pre/post spectrum of the playing stem.
+  Double-click to add a band, drag it, scroll for Q, right-click for shape,
+  slope, dynamics and solo; click a peak in the spectrum to grab it. The
+  strip below keeps the compressor, output gain, phase invert and auto gain.
+  Everything is heard live through the audition, and a shaped stem drags and
+  exports as exactly what you heard; a flat stem stays the raw render byte
+  for byte. Sessions reopen with their shaping intact — including entries
+  tuned before this panel existed.
 - **EXPORT…** (done screen) copies every stem to a folder you choose
   (remembered for next time), with each stem's `.mid` beside it where one
   exists; **REVEAL** opens the internal cache in Finder.
