@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "ui/Theme.h"
+#include "engine/StemCache.h"
 
 using namespace splittr;
 
@@ -14,6 +15,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     content.addChildComponent (downloadView);
     content.addChildComponent (workingView);
     content.addChildComponent (doneView);
+    content.addChildComponent (confirmView); // added last: sits on top
 
     // Fixed design-space layout; the window scales this surface uniformly.
     content.setBounds (0, 0, theme::editorWidth, theme::editorHeight);
@@ -24,6 +26,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         downloadView.setBounds (bounds);
         workingView.setBounds (bounds);
         doneView.setBounds (bounds);
+        confirmView.setBounds (bounds);
     }
 
     auto& engine = splittrProcessor.getEngine();
@@ -61,6 +64,14 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     {
         audition.stop();
         engine.requestNewFile();
+    };
+
+    confirmView.onConfirm = [this] { startSeparation (pendingFile); };
+
+    confirmView.onCancel = [this]
+    {
+        pendingFile = juce::File();
+        confirmView.setVisible (false);
     };
 
     for (int i = 0; i < splittr::numStems; ++i)
@@ -120,7 +131,14 @@ bool SplittrAudioProcessorEditor::isSupportedAudioFile (const juce::String& path
 
 bool SplittrAudioProcessorEditor::isInterestedInFileDrag (const juce::StringArray& files)
 {
-    return files.size() == 1 && isSupportedAudioFile (files[0]);
+    // A stem row is mid external drag, so this is one of our own files coming
+    // straight back: refuse it rather than discarding the session for it.
+    if (splittr::StemRowComponent::isExternalDragInProgress())
+        return false;
+
+    return files.size() == 1
+           && isSupportedAudioFile (files[0])
+           && ! splittr::StemCache::isInsideCache (juce::File (files[0]));
 }
 
 void SplittrAudioProcessorEditor::filesDropped (const juce::StringArray& files, int, int)
@@ -130,8 +148,50 @@ void SplittrAudioProcessorEditor::filesDropped (const juce::StringArray& files, 
     if (files.isEmpty())
         return;
 
+    const juce::File file (files[0]);
+
+    // Belt and braces: rendered stems live in the cache and are never a
+    // meaningful thing to separate.
+    if (splittr::StemCache::isInsideCache (file))
+        return;
+
+    requestSeparationFor (file);
+}
+
+void SplittrAudioProcessorEditor::requestSeparationFor (const juce::File& file)
+{
+    if (! file.existsAsFile())
+        return;
+
+    const auto snap = splittrProcessor.getEngine().getSnapshot();
+
+    const bool workToLose = snap.phase == Phase::Ready || snap.phase == Phase::Decoding
+                            || snap.phase == Phase::Separating || snap.phase == Phase::Rendering;
+
+    // A cache hit republishes instantly without discarding any work, so it
+    // never needs confirming.
+    const bool cached = splittr::StemCache::entryFor (file, snap.quality).complete();
+
+    if (workToLose && ! cached)
+    {
+        pendingFile = file;
+        confirmView.setPendingFile (file);
+        return; // visibility follows pendingFile in timerCallback
+    }
+
+    startSeparation (file);
+}
+
+void SplittrAudioProcessorEditor::startSeparation (juce::File file)
+{
+    pendingFile = juce::File();
+    confirmView.setVisible (false);
+
+    if (! file.existsAsFile())
+        return;
+
     splittrProcessor.getAudition().stop();
-    splittrProcessor.getEngine().requestSeparation (juce::File (files[0]));
+    splittrProcessor.getEngine().requestSeparation (file);
 }
 
 void SplittrAudioProcessorEditor::fileDragEnter (const juce::StringArray&, int, int)
@@ -155,11 +215,7 @@ void SplittrAudioProcessorEditor::browseForAudioFile()
                               | juce::FileBrowserComponent::canSelectFiles,
                           [this] (const juce::FileChooser& fc)
                           {
-                              if (fc.getResult().existsAsFile())
-                              {
-                                  splittrProcessor.getAudition().stop();
-                                  splittrProcessor.getEngine().requestSeparation (fc.getResult());
-                              }
+                              requestSeparationFor (fc.getResult());
                           });
 }
 
@@ -313,6 +369,11 @@ void SplittrAudioProcessorEditor::timerCallback()
         case Phase::Idle: break;
     }
 
+    const bool confirming = pendingFile != juce::File();
+
+    if (confirming)
+        meta = "CONFIRM TO REPLACE";
+
     headerBar.update (animationClock, snap.phase, meta);
 
     const bool showDownload = snap.phase == Phase::NeedsModel || snap.phase == Phase::Downloading;
@@ -325,6 +386,7 @@ void SplittrAudioProcessorEditor::timerCallback()
     downloadView.setVisible (showDownload);
     workingView.setVisible (showWorking);
     doneView.setVisible (showDone);
+    confirmView.setVisible (confirming);
 
     if (showIdle)
     {

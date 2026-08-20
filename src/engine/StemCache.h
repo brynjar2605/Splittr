@@ -46,6 +46,11 @@ public:
     static juce::String keyFor (const juce::File& source, Quality quality);
     static CachedStems entryFor (const juce::File& source, Quality quality);
 
+    // True when the file lives inside the cache — a stem dragged out of the
+    // plugin, say. Re-separating one of our own stems is never meaningful, so
+    // the editor refuses those drops.
+    static bool isInsideCache (const juce::File& file);
+
     // Delete oldest entries until the cache is under maxBytes.
     // (5 float32 stems ~ 370 MB for a 4-minute song, so allow a few songs.)
     static void prune (juce::int64 maxBytes = (juce::int64) 4 * 1024 * 1024 * 1024);

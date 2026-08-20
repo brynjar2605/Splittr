@@ -7,6 +7,7 @@
 #include "ui/DownloadView.h"
 #include "ui/WorkingView.h"
 #include "ui/DoneView.h"
+#include "ui/ConfirmView.h"
 
 class SplittrAudioProcessorEditor : public juce::AudioProcessorEditor,
                                     public juce::DragAndDropContainer,
@@ -30,6 +31,12 @@ private:
     void browseForAudioFile();
     void browseForModelFile();
     void exportStems();
+
+    // Asks first when accepting the file would discard the current stems,
+    // otherwise starts straight away.
+    void requestSeparationFor (const juce::File&);
+    void startSeparation (juce::File); // by value: the confirm path passes pendingFile
+
     static bool isSupportedAudioFile (const juce::String& path);
 
     SplittrAudioProcessor& splittrProcessor;
@@ -43,9 +50,13 @@ private:
     splittr::DownloadView downloadView;
     splittr::WorkingView workingView;
     splittr::DoneView doneView;
+    splittr::ConfirmView confirmView; // overlays the above while confirming
 
     std::unique_ptr<juce::FileChooser> chooser;
     double animationClock = 0.0;
+
+    // Set while the confirmation overlay is up; empty otherwise.
+    juce::File pendingFile;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessorEditor)
 };
