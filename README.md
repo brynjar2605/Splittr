@@ -7,10 +7,16 @@ drag them onto your tracks or export them to a folder.
 Separation runs fully offline on your machine using Meta's pretrained
 **Demucs v4 (htdemucs)** model via the C++ port
 [demucs.cpp](https://github.com/sevagh/demucs.cpp) — no cloud, no account,
-no training. A scan produces **five stems**: the four htdemucs sources
+no training — on the CPU, or many times faster than realtime on the Apple
+Silicon GPU (Metal). A scan produces **five stems**: the four htdemucs sources
 (**Vocals, Drums, Bass, Other**) plus **Instrumental** (everything but the
 voice, summed) — or **seven** in 6-stem mode, where `htdemucs_6s` adds
 **Guitar** and **Piano**. It detects the track's **BPM and key** along the way.
+
+Every stem can then be shaped before it leaves: **TUNE** opens a per-stem
+parametric EQ — up to 24 bands over a live spectrum, each optionally dynamic —
+plus a compressor and output gain, heard live and rendered into what you drag
+out.
 
 A separated stem can also leave as **MIDI**: Spotify's **Basic Pitch** runs
 in-process on the pitched stems, and the resulting `.mid` drags onto a track
@@ -133,6 +139,8 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
 
 - Splittr: **AGPLv3** (uses JUCE 8 under its open-source license)
 - [demucs.cpp](https://github.com/sevagh/demucs.cpp): MIT · Eigen: MPL2
+  (`third_party/demucs-overrides/` contains files derived from demucs.cpp,
+  same MIT terms — see its README for what changed and why)
 - htdemucs weights: MIT (Meta AI research model, ggml conversion by @sevagh)
 - Basic Pitch model and weights: Apache-2.0
   ([spotify/basic-pitch](https://github.com/spotify/basic-pitch)), vendored via
