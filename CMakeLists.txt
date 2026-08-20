@@ -139,3 +139,30 @@ target_link_libraries(splittr_cli PRIVATE
     juce::juce_dsp
     juce::juce_recommended_config_flags
     juce::juce_recommended_warning_flags)
+
+# --- Metal (MPSGraph) inference backend (issue #24) ---
+# One ObjC++ TU, shared by the plugin and the CLI. It self-guards with
+# #if defined(__APPLE__), and every entry point runtime-checks the OS/GPU, so
+# adding it here is safe even though the deployment target predates MPSGraph
+# features it uses. ARC because the engine holds Metal objects in C++ members
+# and must survive C++ exceptions (cancellation) unwinding through it.
+if(APPLE)
+    enable_language(OBJCXX)
+
+    set_target_properties(Splittr splittr_cli PROPERTIES
+        OBJCXX_STANDARD 17
+        OBJCXX_STANDARD_REQUIRED ON)
+
+    target_sources(Splittr PRIVATE src/engine/DemucsMetal.mm)
+    target_sources(splittr_cli PRIVATE src/engine/DemucsMetal.mm)
+
+    set_source_files_properties(src/engine/DemucsMetal.mm PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc")
+
+    foreach(metal_target Splittr splittr_cli)
+        target_link_libraries(${metal_target} PRIVATE
+            "-framework Metal"
+            "-framework MetalPerformanceShadersGraph"
+            "-framework Foundation")
+    endforeach()
+endif()

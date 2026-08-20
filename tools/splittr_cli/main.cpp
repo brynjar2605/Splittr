@@ -12,10 +12,12 @@
 // what a DAW would see rather than what the transcriber thinks it wrote.
 
 #include "engine/AudioFileIO.h"
+#include "engine/ComputeBackend.h"
 #include "engine/DemucsSeparator.h"
 #include "engine/MidiTranscriber.h"
 #include "engine/TrackAnalyzer.h"
 
+#include <cstdlib>
 #include <iostream>
 
 namespace
@@ -297,19 +299,37 @@ int main (int argc, char** argv)
 
     splittr::SeparationResult result;
 
+    // Issue #24: SPLITTR_BACKEND=gpu asks for the Metal (MPSGraph) backend.
+    // A gpu request can still legitimately end up on the CPU (old machine,
+    // SPLITTR_NO_GPU, mid-run Metal failure), so which backend actually ran
+    // is inferred from the progress stream — the Metal driver prefixes every
+    // message with "[metal]" and the fallback announcement mentions the CPU —
+    // and printed as one machine-checkable line below.
+    const auto* backendEnv = std::getenv ("SPLITTR_BACKEND");
+    const auto backend = backendEnv != nullptr && juce::String (backendEnv) == "gpu"
+                             ? splittr::ComputeBackend::gpu
+                             : splittr::ComputeBackend::cpu;
+
+    auto sawMetal = false;
+    auto sawFallback = false;
+
     const auto inferenceStart = juce::Time::getMillisecondCounterHiRes();
 
     const auto status = splittr::DemucsSeparator::separate (
         { modelFile },
         decoded.buffer,
-        [] (float progress, const juce::String& message)
+        [&sawMetal, &sawFallback] (float progress, const juce::String& message)
         {
+            sawMetal = sawMetal || message.startsWith ("[metal]");
+            sawFallback = sawFallback || message.contains ("taking the CPU path");
+
             std::cout << "[" << juce::String (progress * 100.0f, 1) << "%] "
                       << message << "\n";
         },
         [] { return true; },
         result,
-        error);
+        error,
+        backend);
 
     if (status != splittr::DemucsSeparator::Status::ok)
     {
@@ -321,6 +341,8 @@ int main (int argc, char** argv)
 
     std::cout << "Inference: " << juce::String (inferenceSeconds, 1) << " s ("
               << juce::String (decoded.durationSeconds / inferenceSeconds, 2) << "x realtime)\n";
+
+    std::cout << "Backend: " << (sawMetal && ! sawFallback ? "gpu (Metal)" : "cpu") << "\n";
 
     std::cout << "Sources: " << result.numSources << "\n";
 
