@@ -309,7 +309,7 @@ public:
         const auto rtFactor = inferenceSeconds > 0 ? duration / inferenceSeconds : 0.0;
 
         juce::XmlElement meta ("SplittrStems");
-        meta.setAttribute ("version", 2);
+        meta.setAttribute ("version", 3); // 3: normalised, sqrt-mapped waveform columns
         meta.setAttribute ("sourcePath", source.getFullPathName());
         meta.setAttribute ("quality", quality == Quality::best ? "best" : "fast");
         meta.setAttribute ("duration", duration);
@@ -467,7 +467,7 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
 
     auto xml = juce::parseXML (entry.meta);
 
-    if (xml == nullptr || xml->getIntAttribute ("version") != 2)
+    if (xml == nullptr || xml->getIntAttribute ("version") != 3)
         return false;
 
     mutate (gen, [&] (EngineSnapshot& s)

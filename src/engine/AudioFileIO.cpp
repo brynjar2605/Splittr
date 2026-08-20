@@ -113,23 +113,45 @@ std::vector<float> AudioFileIO::peakColumns (const juce::AudioBuffer<float>& buf
     std::vector<float> columns ((size_t) numColumns, 0.0f);
 
     const auto numSamples = buffer.getNumSamples();
+    const auto numChannels = buffer.getNumChannels();
 
-    if (numSamples <= 0 || numColumns <= 0)
+    if (numSamples <= 0 || numColumns <= 0 || numChannels <= 0)
         return columns;
+
+    float maxColumn = 0.0f;
 
     for (int col = 0; col < numColumns; ++col)
     {
         const auto start = (int) ((juce::int64) col * numSamples / numColumns);
         const auto end = (int) ((juce::int64) (col + 1) * numSamples / numColumns);
-        const auto length = juce::jmax (1, end - start);
+        const auto length = juce::jlimit (1, numSamples - start, end - start);
 
-        float peak = 0.0f;
+        // RMS rather than |peak|: a column spans seconds, and a limited master
+        // touches full scale inside every one of them, so peak columns render
+        // as a solid slab. RMS still follows the arrangement.
+        double energy = 0.0;
 
-        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
-            peak = juce::jmax (peak, buffer.getMagnitude (ch, start, juce::jmin (length, numSamples - start)));
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            const double rms = buffer.getRMSLevel (ch, start, length);
+            energy += rms * rms;
+        }
 
-        columns[(size_t) col] = juce::jlimit (0.0f, 1.0f, peak);
+        const auto value = (float) std::sqrt (energy / (double) numChannels);
+
+        columns[(size_t) col] = value;
+        maxColumn = juce::jmax (maxColumn, value);
     }
+
+    if (maxColumn <= 1.0e-6f)
+        return columns; // silent buffer: flat line
+
+    // Normalise to this buffer's own loudest column, then sqrt-map (perceptual)
+    // so quiet passages keep visible height. Normalisation is per buffer, so
+    // the source is normalised to itself and each stem to its own loudest
+    // column - stem rows are not level-comparable to each other.
+    for (auto& c : columns)
+        c = std::sqrt (juce::jlimit (0.0f, 1.0f, c / maxColumn));
 
     return columns;
 }

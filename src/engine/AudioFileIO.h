@@ -25,7 +25,9 @@ public:
                           double sampleRate,
                           juce::String& error);
 
-    // Downsampled |peak| per column, 0..1 — for the UI waveforms.
+    // Downsampled waveform columns, 0..1 — for the UI waveforms. Per column
+    // RMS, normalised to the buffer's loudest column and sqrt-mapped so loud
+    // (limited) material still shows dynamics instead of a solid block.
     static std::vector<float> peakColumns (const juce::AudioBuffer<float>& buffer, int numColumns);
 
     juce::AudioFormatManager& formats() { return formatManager; }
