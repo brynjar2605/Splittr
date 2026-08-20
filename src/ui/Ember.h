@@ -21,10 +21,11 @@ struct Ember
     float phase = 0.0f;     // 0 - 1
 };
 
-inline Ember emberFor (int col, int row = 0) noexcept
+inline Ember emberFor (int col, int row = 0, int seed = 0) noexcept
 {
     // Deterministic per-cell hash so no two neighbours are in phase.
-    juce::uint32 h = (juce::uint32) col * 73856093u ^ (juce::uint32) row * 19349663u;
+    juce::uint32 h = (juce::uint32) col * 73856093u ^ (juce::uint32) row * 19349663u
+                     ^ (juce::uint32) seed * 83492791u;
     h ^= h >> 13;
     h *= 0x5bd1e995u;
     h ^= h >> 15;
@@ -60,6 +61,48 @@ inline float emberAlpha (const Ember& e, double clockSeconds, float ramp,
                          float floorAlpha = 0.13f) noexcept
 {
     return juce::jmax (floorAlpha, e.baseAlpha * emberFlicker (e, clockSeconds) * ramp);
+}
+
+// --- burning waveform bars -------------------------------------------------
+// One waveform column is far too coarse to read as fire: a 5-9px bar blinking
+// as a unit is a blinking bar. `paintEmberBar` dices the bar into the matrix
+// bar's grain instead -- ~2px cells with 1px gaps, plus a second sub-column
+// when the bar is wide enough for the seam to read -- and hashes an ember per
+// sub-cell from (column, sub-column, cell row, `seed`). The gaps leave the
+// dimmed base bar showing, so the silhouette stays solid; only the fire is
+// subdivided.
+//
+// This is the burned region's cost and nothing else's: callers must keep it
+// behind their `ramp > 0` test so columns ahead of the head stay one fillRect.
+inline void paintEmberBar (juce::Graphics& g, juce::Colour colour,
+                           juce::Rectangle<float> bar, int col, int seed,
+                           double clockSeconds, float ramp)
+{
+    constexpr float cellGap = 1.0f;
+    constexpr float cellHeight = 2.0f; // MatrixBar's row height
+
+    // Narrow bars would split into sub-pixel slivers; leave those whole.
+    const int subCols = bar.getWidth() > 4.0f ? 2 : 1;
+    const auto subWidth = (bar.getWidth() - cellGap * (float) (subCols - 1)) / (float) subCols;
+
+    // Round rather than floor so the cells span the bar exactly: the top and
+    // bottom of the silhouette must not creep in as the wave moves.
+    const int cellRows = juce::jmax (1, juce::roundToInt ((bar.getHeight() + cellGap)
+                                                          / (cellHeight + cellGap)));
+    const auto cellH = (bar.getHeight() - cellGap * (float) (cellRows - 1)) / (float) cellRows;
+
+    for (int sub = 0; sub < subCols; ++sub)
+    {
+        const auto x = bar.getX() + (float) sub * (subWidth + cellGap);
+
+        for (int cell = 0; cell < cellRows; ++cell)
+        {
+            const auto e = emberFor (col * 2 + sub, cell, seed);
+
+            g.setColour (colour.withAlpha (emberAlpha (e, clockSeconds, ramp, 0.0f)));
+            g.fillRect (x, bar.getY() + (float) cell * (cellH + cellGap), subWidth, cellH);
+        }
+    }
 }
 
 } // namespace splittr::ui

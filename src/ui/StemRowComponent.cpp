@@ -206,15 +206,16 @@ void StemRowComponent::paint (juce::Graphics& g)
                 const auto centre = ((float) i + 0.5f) / (float) cols;
                 const auto ramp = burning ? ui::emberRamp (centre, head) : 0.0f;
 
-                g.setColour (baseCol.withMultipliedAlpha (1.0f - 0.75f * ramp));
+                // The flame no longer covers the whole bar, so the base is only
+                // half-dimmed under it: the gaps between the ember cells are
+                // what carries the burned silhouette's weight now.
+                g.setColour (baseCol.withMultipliedAlpha (1.0f - 0.45f * ramp));
                 g.fillRect (x, y, colW, h);
 
+                // Behind the playhead the bar burns at the matrix bar's grain:
+                // ~2px cells, split in two across the width where it fits.
                 if (ramp > 0.0f)
-                {
-                    g.setColour (flameCol.withAlpha (
-                        ui::emberAlpha (ui::emberFor (i, emberRow), clock, ramp, 0.0f)));
-                    g.fillRect (x, y, colW, h);
-                }
+                    ui::paintEmberBar (g, flameCol, { x, y, colW, h }, i, emberRow, clock, ramp);
             }
 
             // Shared playhead: the same line on every row ties them together.

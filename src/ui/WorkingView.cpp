@@ -138,12 +138,10 @@ void WorkingView::paint (juce::Graphics& g)
                 g.setColour (theme::text55.withMultipliedAlpha (1.0f - 0.75f * ramp));
                 g.fillRect (x, y, colW, h);
 
+                // Burned columns are diced into the matrix bar's grain rather
+                // than flickering whole; the ones ahead stay one fillRect.
                 if (ramp > 0.0f)
-                {
-                    g.setColour (theme::scanEmber.withAlpha (
-                        ui::emberAlpha (ui::emberFor (i), clock, ramp, 0.0f)));
-                    g.fillRect (x, y, colW, h);
-                }
+                    ui::paintEmberBar (g, theme::scanEmber, { x, y, colW, h }, i, 0, clock, ramp);
             }
         }
     }
