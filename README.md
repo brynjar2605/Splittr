@@ -58,9 +58,12 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
 - **DRAG ALL** (done screen, left of the footer) drags every stem out at once.
   Ableton makes one track per file, so a whole stem session lands in the set in
   a single gesture. Dragging a single row still drags just that stem.
-- **EXPORT…** (done screen) copies every stem, named
-  `<song> - <Stem>.wav`, to a folder you choose (remembered for next time);
-  **REVEAL** opens the internal cache in Finder.
+- **EXPORT…** (done screen) copies every stem to a folder you choose
+  (remembered for next time); **REVEAL** opens the internal cache in Finder.
+- Stems that leave the plugin — dragged or exported — are named
+  `<song> - <Stem> - 124BPM - F#m.wav`, and carry the same values in their
+  WAV LIST/INFO metadata. Whatever came back undetected is simply left out, so
+  a rubato track gets no BPM part and an atonal one no key part.
 - **THEME / ACCENT** (idle screen): dark or light UI, plus a full-spectrum
   hue strip — click or drag to recolor every accent in the plugin live.
   Preferences are global and persist.

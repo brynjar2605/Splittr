@@ -282,12 +282,17 @@ void SplittrAudioProcessorEditor::exportStems()
 
                               splittrProcessor.getEngine().setLastExportDir (dir);
 
+                              // The same names the cache already writes, so an
+                              // exported stem and a dragged one are the same
+                              // file — and an entry cached before the pattern
+                              // existed still gains it on the way out.
                               const auto base = snap.sourceFile.getFileNameWithoutExtension();
 
                               for (const auto& stem : snap.stems)
                                   if (stem.wav.existsAsFile())
                                       stem.wav.copyFileTo (dir.getChildFile (
-                                          base + " - " + stem.name + ".wav"));
+                                          splittr::stemFileName (base, stem.name,
+                                                                 snap.bpm, snap.key)));
 
                               dir.revealToUser(); // confirmation: show the result in Finder
                           });

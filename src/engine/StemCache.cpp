@@ -4,6 +4,63 @@
 namespace splittr
 {
 
+namespace
+{
+    // Only the song title is untrusted, so only it goes through
+    // createLegalFileName: that also strips '#', which is the whole difference
+    // between F# and F, and the stem/BPM/key parts are ours to begin with.
+    //
+    // It drops ',' as well, which is what keeps the meta's comma-joined file
+    // list unambiguous — do not swap it for a laxer sanitiser without giving
+    // that list a different separator.
+    juce::String legalSongName (const juce::String& name)
+    {
+        auto song = juce::File::createLegalFileName (name).trim();
+
+        // macOS allows 255 bytes per path component and the suffix can add ~40,
+        // so a long — or merely multi-byte — title needs trimming well before
+        // createLegalFileName's 128-character cap bites.
+        while (song.getNumBytesAsUTF8() > 160)
+            song = song.dropLastCharacters (1);
+
+        return song.trim();
+    }
+} // namespace
+
+juce::String compactKey (const juce::String& key)
+{
+    const auto trimmed = key.trim();
+
+    if (trimmed.isEmpty())
+        return {};
+
+    // "F# MIN" -> "F#m"; major is the unmarked case, so "Bb MAJ" -> "Bb".
+    const auto tonic = trimmed.upToFirstOccurrenceOf (" ", false, false);
+
+    return trimmed.endsWithIgnoreCase ("MIN") ? tonic + "m" : tonic;
+}
+
+juce::String stemFileName (const juce::String& songName, const juce::String& stemName,
+                           double bpm, const juce::String& key)
+{
+    const auto song = legalSongName (songName);
+
+    juce::String name;
+
+    if (song.isNotEmpty())
+        name << song << " - ";
+
+    name << stemName;
+
+    if (bpm > 0.0)
+        name << " - " << juce::roundToInt (bpm) << "BPM";
+
+    if (const auto compact = compactKey (key); compact.isNotEmpty())
+        name << " - " << compact;
+
+    return name + ".wav";
+}
+
 juce::File StemCache::cacheRoot()
 {
     return ModelManager::appDataDir().getChildFile ("cache");
@@ -23,19 +80,31 @@ juce::String StemCache::keyFor (const juce::File& source, Quality quality)
     return juce::String::toHexString (identity.hashCode64());
 }
 
-CachedStems StemCache::entryIn (const juce::File& dir, const juce::StringArray& stemNames)
+CachedStems StemCache::entryIn (const juce::File& dir, const juce::StringArray& stemNames,
+                                const juce::StringArray& stemFiles)
 {
     CachedStems entry;
     entry.dir = dir;
 
-    for (const auto& name : stemNames)
+    for (int i = 0; i < stemNames.size(); ++i)
     {
-        entry.names.push_back (name);
-        entry.stems.push_back (dir.getChildFile (name + ".wav"));
+        // <Name>.wav is the pre-#11 layout, and still the answer whenever an
+        // entry does not record what its stems are called.
+        const auto file = i < stemFiles.size() && stemFiles[i].isNotEmpty()
+                              ? stemFiles[i]
+                              : stemNames[i] + ".wav";
+
+        entry.names.push_back (stemNames[i]);
+        entry.stems.push_back (dir.getChildFile (file));
     }
 
     entry.meta = dir.getChildFile ("meta.xml");
     return entry;
+}
+
+juce::File StemCache::dirFor (const juce::File& source, Quality quality)
+{
+    return cacheRoot().getChildFile (keyFor (source, quality));
 }
 
 CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
@@ -45,7 +114,7 @@ CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
     for (auto kind : stemOrderFor (quality))
         names.add (stemName (kind));
 
-    return entryIn (cacheRoot().getChildFile (keyFor (source, quality)), names);
+    return entryIn (dirFor (source, quality), names);
 }
 
 bool StemCache::isInsideCache (const juce::File& file)

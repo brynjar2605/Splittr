@@ -71,7 +71,8 @@ bool AudioFileIO::decodeToStereo44k (const juce::File& file, DecodedAudio& out, 
 bool AudioFileIO::writeWavFloat32 (const juce::File& file,
                                    const juce::AudioBuffer<float>& buffer,
                                    double sampleRate,
-                                   juce::String& error)
+                                   juce::String& error,
+                                   const juce::StringPairArray& metadata)
 {
     file.getParentDirectory().createDirectory();
     file.deleteFile();
@@ -84,14 +85,17 @@ bool AudioFileIO::writeWavFloat32 (const juce::File& file,
         return false;
     }
 
+    auto options = juce::AudioFormatWriterOptions {}
+                       .withSampleRate (sampleRate)
+                       .withNumChannels (buffer.getNumChannels())
+                       .withBitsPerSample (32)
+                       .withSampleFormat (juce::AudioFormatWriterOptions::SampleFormat::floatingPoint);
+
+    for (const auto& key : metadata.getAllKeys())
+        options = options.withMetadata (key, metadata[key]);
+
     juce::WavAudioFormat wavFormat;
-    auto writer = wavFormat.createWriterFor (
-        stream,
-        juce::AudioFormatWriterOptions {}
-            .withSampleRate (sampleRate)
-            .withNumChannels (buffer.getNumChannels())
-            .withBitsPerSample (32)
-            .withSampleFormat (juce::AudioFormatWriterOptions::SampleFormat::floatingPoint));
+    auto writer = wavFormat.createWriterFor (stream, options);
 
     if (writer == nullptr)
     {

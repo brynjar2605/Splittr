@@ -88,7 +88,29 @@ inline const std::vector<int>& stemOrderFor (Quality q)
 
 inline int stemCountFor (Quality q) { return (int) stemOrderFor (q).size(); }
 
+// --- export naming ---------------------------------------------------------
+// A stem that leaves the plugin — dragged out or exported — carries what the
+// scan found in its name, so a track in the DAW is self-describing:
+//
+//     Midnight Take 3 - Vocals - 124BPM - F#m.wav
+//
+// The UI still shows the canonical stem name; only the file gets the suffix.
+
+// Compact key for filenames: "F# MIN" -> "F#m", "Bb MAJ" -> "Bb". Empty stays
+// empty — material too ambiguous to claim a key for gets no suffix at all.
+juce::String compactKey (const juce::String& key);
+
+// The pattern above, with the parts that came back undetected (bpm 0, empty
+// key) left out and the BPM rounded to whole numbers.
+juce::String stemFileName (const juce::String& songName, const juce::String& stemName,
+                           double bpm, const juce::String& key);
+
 // One cache entry: the rendered stems plus a meta.xml with waveforms/peaks/stats.
+//
+// `names` are the canonical stem names (Vocals, Drums, …) — the identity the UI
+// and the meta's per-stem attributes are keyed on. The files they live in carry
+// the export pattern instead, so a stem can be dragged straight out of the cache
+// under the name it should land in the DAW with.
 struct CachedStems
 {
     juce::File dir;
@@ -136,12 +158,22 @@ public:
     // an edited file (or a quality switch) re-separates while an untouched
     // one is an instant hit. All three modes coexist.
     static juce::String keyFor (const juce::File& source, Quality quality);
+    static juce::File dirFor (const juce::File& source, Quality quality);
+
+    // The entry as it would be laid out with no naming applied: canonical stem
+    // names, each in <Name>.wav. That is what a pre-#11 entry actually holds,
+    // and where a fresh run looks for its meta before reading the real names.
     static CachedStems entryFor (const juce::File& source, Quality quality);
 
     // Re-point an entry at an explicit stem set — the one recorded in its
     // meta.xml — so a cached run can be reopened by the names it was written
     // with rather than by whatever mode is selected now.
-    static CachedStems entryIn (const juce::File& dir, const juce::StringArray& stemNames);
+    //
+    // `stemFiles` is the filenames those stems live in, parallel to stemNames.
+    // Empty (or short) falls back to <Name>.wav, which is exactly what entries
+    // written before the export pattern existed hold.
+    static CachedStems entryIn (const juce::File& dir, const juce::StringArray& stemNames,
+                                const juce::StringArray& stemFiles = {});
 
     // True when the file lives inside the cache — a stem dragged out of the
     // plugin, say. Re-separating one of our own stems is never meaningful, so
