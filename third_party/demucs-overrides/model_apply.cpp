@@ -111,8 +111,14 @@ shift_inference(const struct demucscpp::demucs_model &model,
 
     symmetric_zero_padding(padded_mix, full_audio, 2 * max_shift);
 
-    int offset = rand() % max_shift;
-    // int offset = 1337;
+    // Fixed offset — upstream's own dormant alternative, un-commented. The
+    // chunked driver in DemucsSeparator runs one of these per worker thread,
+    // and the global rand() handed each chunk a different offset depending on
+    // thread scheduling: same binary, same input, only ~20 dB run-to-run
+    // self-agreement (issue #24). A single shift pass averages nothing, so any
+    // in-range offset is as valid as a random one — and a fixed one makes
+    // every run bit-reproducible.
+    int offset = 1337;
 
     std::cout << "1., apply model w/ shift, offset: " << offset << std::endl;
 
@@ -356,8 +362,14 @@ shift_inference(const struct demucscpp_v3::demucs_v3_model &model,
 
     symmetric_zero_padding(padded_mix, full_audio, 2 * max_shift);
 
-    int offset = rand() % max_shift;
-    // int offset = 1337;
+    // Fixed offset — upstream's own dormant alternative, un-commented. The
+    // chunked driver in DemucsSeparator runs one of these per worker thread,
+    // and the global rand() handed each chunk a different offset depending on
+    // thread scheduling: same binary, same input, only ~20 dB run-to-run
+    // self-agreement (issue #24). A single shift pass averages nothing, so any
+    // in-range offset is as valid as a random one — and a fixed one makes
+    // every run bit-reproducible.
+    int offset = 1337;
 
     std::cout << "1., apply model w/ shift, offset: " << offset << std::endl;
 
