@@ -94,6 +94,10 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     downloadView.onDownload = [&engine] { engine.startModelDownload(); };
     downloadView.onLocate = [this] { browseForModelFile(); };
 
+    // Same slot, same engine call: in first run it aborts the download, in the
+    // working state the separation (issue #20).
+    workingView.onCancel = [&engine] { engine.requestCancel(); };
+
     doneView.onReveal = [&engine]
     {
         const auto stems = engine.getSnapshot().stems;

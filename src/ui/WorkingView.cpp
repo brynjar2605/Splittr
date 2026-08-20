@@ -13,6 +13,9 @@ namespace
     constexpr int headerHeight = 24;
     constexpr int maxSourceRowHeight = 36;
 
+    // Gap between the tick strip and the CANCEL row below it.
+    constexpr int cancelGap = 12;
+
     // 8px padding, label row 13, 6 gap, bar, 6 gap, caption 11, 8px padding
     constexpr int footerBlockHeight = 8 + 13 + 6 + MatrixBar::barHeight + 6 + 11 + 8;
 
@@ -56,6 +59,11 @@ WorkingView::WorkingView()
 
 void WorkingView::update (double clockSeconds, const EngineSnapshot& s)
 {
+    // A different file is a different run, even if the view never went away
+    // in between: the cancel arms itself again.
+    if (s.sourceFile != snap.sourceFile)
+        cancelling = false;
+
     snap = s;
     clock = clockSeconds;
     bar.update (clockSeconds, s.progress);
@@ -79,6 +87,8 @@ void WorkingView::paint (juce::Graphics& g)
     // ===== left column =====
     auto ruler = left.removeFromTop (12);
     left.removeFromTop (8);
+    auto action = left.removeFromBottom (ui::TagButton::idealHeight);
+    left.removeFromBottom (cancelGap);
     auto ticks = left.removeFromBottom (9);
     left.removeFromBottom (8);
     auto box = left; // waveform box fills the rest
@@ -171,6 +181,15 @@ void WorkingView::paint (juce::Graphics& g)
     for (int x = ticks.getX(); x < ticks.getRight(); x += 13)
         g.fillRect (x, ticks.getY(), 1, ticks.getHeight());
 
+    // abort, in the first-run footer's slot and its colours
+    cancelBounds = ui::drawTagAction (g,
+                                      cancelling ? juce::String::fromUTF8 ("CANCELLING\xe2\x80\xa6")
+                                                 : juce::String ("CANCEL"),
+                                      action.getX(), action.getY(),
+                                      hoveredCancel && ! cancelling,
+                                      cancelling ? theme::line : theme::border35,
+                                      cancelling ? theme::text40 : theme::text);
+
     // ===== right column: source table =====
     g.setColour (theme::bgPanel);
     g.fillRect (table);
@@ -244,6 +263,51 @@ void WorkingView::paint (juce::Graphics& g)
     if (snap.etaSeconds >= 0.0)
         g.drawText ("eta " + juce::String ((int) std::round (snap.etaSeconds)) + "s",
                     caption, juce::Justification::centredRight);
+}
+
+void WorkingView::mouseUp (const juce::MouseEvent& e)
+{
+    if (cancelling || onCancel == nullptr || ! cancelBounds.contains (e.getPosition()))
+        return;
+
+    // The engine stops at the next segment boundary and cleans up whatever it
+    // had written, so the action goes inert rather than inviting a second click.
+    cancelling = true;
+    hoveredCancel = false;
+    setMouseCursor (juce::MouseCursor::NormalCursor);
+    repaint();
+
+    onCancel();
+}
+
+void WorkingView::mouseMove (const juce::MouseEvent& e)
+{
+    const auto over = ! cancelling && cancelBounds.contains (e.getPosition());
+
+    if (over != hoveredCancel)
+    {
+        hoveredCancel = over;
+        setMouseCursor (over ? juce::MouseCursor::PointingHandCursor
+                             : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+}
+
+void WorkingView::mouseExit (const juce::MouseEvent&)
+{
+    if (hoveredCancel)
+    {
+        hoveredCancel = false;
+        repaint();
+    }
+}
+
+void WorkingView::visibilityChanged()
+{
+    // The view is hidden the moment the job lets go, so this is where a spent
+    // cancel is cleared — the next run starts with a live action.
+    cancelling = false;
+    hoveredCancel = false;
 }
 
 } // namespace splittr
