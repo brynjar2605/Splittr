@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "SpectrumTap.h"
 #include "StemCache.h" // maxStems
 #include "StemFx.h"
 
@@ -58,6 +59,35 @@ public:
     // audio thread picks the rest up at the top of its next block.
     void setStemFx (int stem, const StemFxParams&);
 
+    // Live spectrum for the TUNE panel (issue #25). The analyzer follows one
+    // stem at a time -- the one being tuned -- and -1 parks it. A parked tap
+    // costs the audio thread one branch per chunk and nothing else, so the
+    // panel points it at a stem when it opens and parks it when it closes.
+    void setSpectrumStem (int stemIndex);
+    int spectrumStem() const { return spectrumStemIndex.load (std::memory_order_relaxed); }
+
+    // The two measurement points around the tapped stem's chain: `pre` is the
+    // stem as it was rendered, `post` is what the shaping made of it. Both sit
+    // before the mute ramp, because the panel is showing what the EQ is doing,
+    // not whether the stem is currently audible.
+    //
+    // Message thread: these hand out the consumer end of the taps (read()),
+    // never the producer end.
+    SpectrumTap& preSpectrum() { return spectrumPre; }
+    SpectrumTap& postSpectrum() { return spectrumPost; }
+
+    // Both taps in one call, which is all the panel ever wants. They run in
+    // lockstep -- same samples, same hop boundaries -- so in practice a fresh
+    // frame on one means a fresh frame on the other; the flags say so rather
+    // than assuming it. A few KB: hold it, do not build it per paint.
+    struct SpectrumFrames
+    {
+        SpectrumTap::Frame pre, post;
+        bool hasPre = false, hasPost = false;
+    };
+
+    bool readSpectrum (SpectrumFrames&);
+
     bool isLoaded() const { return loaded.load(); }
     bool isPlaying() const;
 
@@ -98,6 +128,15 @@ private:
     // Filter and envelope state that a jump (or a fresh load) has invalidated,
     // cleared where it is safe to touch: on the audio thread.
     std::atomic<bool> fxNeedsReset { false };
+
+    // The analyzer is a measurement, not a stage: it reads the samples the
+    // chain is about to see and the ones it produced, and changes neither.
+    // `spectrumStemSeen` is the audio thread's own copy of the target, the same
+    // trick as `fxSeen` -- when it moves, both taps drop their half-window of
+    // history so the outgoing stem cannot smear into the new one's first frame.
+    SpectrumTap spectrumPre, spectrumPost;
+    std::atomic<int> spectrumStemIndex { -1 };
+    int spectrumStemSeen = -1;
 
     // How many stems the loaded set actually has; read on the audio thread.
     std::atomic<int> activeStems { 0 };

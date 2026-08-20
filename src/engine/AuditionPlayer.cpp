@@ -137,7 +137,17 @@ void AuditionPlayer::prepareToPlay (double sampleRate, int samplesPerBlock)
         // The host rate, not the file's: the transport hands us resampled
         // audio, so that is the rate the chains actually see (issue #9).
         chains[(size_t) i].prepare (hostRate, hostBlockSize);
+
+        // Audition chains honour the solo flags the panel streams; the bounce
+        // deliberately never arms this, so an exported stem can never render a
+        // solo listen (issue #25).
+        chains[(size_t) i].setSoloBand (StemFxChain::soloFromParams);
     }
+
+    // The host rate again, and for the same reason: the analyzer has to measure
+    // what the audio thread actually processes, not what is on disk.
+    spectrumPre.prepare (hostRate);
+    spectrumPost.prepare (hostRate);
 
     transport.prepareToPlay (hostBlockSize, hostRate);
     prepared = true;
@@ -163,8 +173,15 @@ void AuditionPlayer::processAddTo (juce::AudioBuffer<float>& buffer)
         gain[(size_t) s].setTargetValue (muted[(size_t) s].load (std::memory_order_relaxed) ? 0.0f : 1.0f);
 
     if (fxNeedsReset.exchange (false, std::memory_order_acquire))
+    {
         for (auto& chain : chains)
             chain.reset();
+
+        // The analyzer's window is state too, and half of it is from before the
+        // jump.
+        spectrumPre.reset();
+        spectrumPost.reset();
+    }
 
     // Pick up whatever the UI published since the last block. tryEnter: waiting
     // on the message thread here is never worth it, and a missed grab only
@@ -182,12 +199,35 @@ void AuditionPlayer::processAddTo (juce::AudioBuffer<float>& buffer)
         }
     }
 
+    // Which stem the TUNE panel is watching, hoisted out of the chunk loop:
+    // with no panel open this is -1, `tapping` is false, and the taps are never
+    // entered at all.
+    const auto tapStem = spectrumStemIndex.load (std::memory_order_relaxed);
+    const auto tapping = juce::isPositiveAndBelow (tapStem, numStems);
+
+    if (tapStem != spectrumStemSeen)
+    {
+        spectrumStemSeen = tapStem;
+        spectrumPre.reset();
+        spectrumPost.reset();
+    }
+
     for (int offset = 0; offset < numSamples;)
     {
         const auto chunk = juce::jmin (numSamples - offset, tempSamples);
 
         const juce::AudioSourceChannelInfo info (&temp, 0, chunk);
         transport.getNextAudioBlock (info);
+
+        // The analyzer brackets exactly one stem's chain. The chains are
+        // per-stem and in place, so nothing in the loop below touches the
+        // tapped slot except its own chain -- which is why the two pushes can
+        // sit outside the loop instead of inside it, and cost one branch each
+        // when nothing is being tuned.
+        if (tapping)
+            spectrumPre.push (temp.getReadPointer (tapStem * 2),
+                              temp.getReadPointer (tapStem * 2 + 1),
+                              chunk);
 
         // Shaping first, then the mute ramp: the ramp is the mixer's business
         // and must stay the last thing that touches a stem. A flat chain costs
@@ -196,6 +236,13 @@ void AuditionPlayer::processAddTo (juce::AudioBuffer<float>& buffer)
             chains[(size_t) s].process (temp.getWritePointer (s * 2),
                                         temp.getWritePointer (s * 2 + 1),
                                         chunk);
+
+        // Post, and still ahead of the ramp: the panel shows what the shaping
+        // did to the stem, not whether the stem is currently audible.
+        if (tapping)
+            spectrumPost.push (temp.getReadPointer (tapStem * 2),
+                               temp.getReadPointer (tapStem * 2 + 1),
+                               chunk);
 
         // Gains are applied in short sub-chunks so the mute ramp lasts the same
         // ~10ms whatever block size the host hands us.
@@ -330,6 +377,25 @@ void AuditionPlayer::setStemFx (int stem, const StemFxParams& fx)
     // Bumped after the write and read before the copy, so the audio thread
     // cannot see the counter move without seeing the params behind it.
     fxChanges.fetch_add (1, std::memory_order_release);
+}
+
+void AuditionPlayer::setSpectrumStem (int stemIndex)
+{
+    // Anything that is not a stem parks the tap, so a caller does not have to
+    // spell -1 to mean "nothing open".
+    const auto target = juce::isPositiveAndBelow (stemIndex, (int) maxStems) ? stemIndex : -1;
+
+    // Relaxed: the audio thread picks the new target up on its next block, and
+    // there is no other state riding along with it.
+    spectrumStemIndex.store (target, std::memory_order_relaxed);
+}
+
+bool AuditionPlayer::readSpectrum (SpectrumFrames& out)
+{
+    out.hasPre = spectrumPre.read (out.pre);
+    out.hasPost = spectrumPost.read (out.post);
+
+    return out.hasPre || out.hasPost;
 }
 
 bool AuditionPlayer::isPlaying() const
