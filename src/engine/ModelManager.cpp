@@ -14,7 +14,31 @@ const std::vector<juce::String>& ModelManager::filenamesFor (Quality q)
         "ggml-model-htdemucs_ft_vocals-4s-f16.bin",
     };
 
-    return q == Quality::best ? best : fast;
+    static const std::vector<juce::String> sixStem { "ggml-model-htdemucs-6s-f16.bin" };
+
+    switch (q)
+    {
+        case Quality::best:    return best;
+        case Quality::sixStem: return sixStem;
+        case Quality::fast:    break;
+    }
+
+    return fast;
+}
+
+juce::int64 ModelManager::expectedBytes (const juce::String& filename)
+{
+    return filename.contains ("-6s-") ? bytes6Source : bytes4Source;
+}
+
+juce::int64 ModelManager::expectedBytesFor (Quality q)
+{
+    juce::int64 total = 0;
+
+    for (const auto& name : filenamesFor (q))
+        total += expectedBytes (name);
+
+    return total;
 }
 
 juce::String ModelManager::urlFor (const juce::String& filename)
@@ -58,13 +82,32 @@ void ModelManager::writeSetting (const juce::String& attribute, const juce::Stri
 
 Quality ModelManager::quality() const
 {
-    return readSettings()->getStringAttribute ("quality") == "best" ? Quality::best
-                                                                    : Quality::fast;
+    const auto stored = readSettings()->getStringAttribute ("quality");
+
+    if (stored == "best")
+        return Quality::best;
+
+    if (stored == "6s")
+        return Quality::sixStem;
+
+    return Quality::fast;
 }
 
 void ModelManager::setQuality (Quality q)
 {
-    writeSetting ("quality", q == Quality::best ? "best" : "fast");
+    writeSetting ("quality", qualityToken (q));
+}
+
+juce::String ModelManager::qualityToken (Quality q)
+{
+    switch (q)
+    {
+        case Quality::best:    return "best";
+        case Quality::sixStem: return "6s";
+        case Quality::fast:    break;
+    }
+
+    return "fast";
 }
 
 void ModelManager::setUserModelDir (const juce::File& dir)

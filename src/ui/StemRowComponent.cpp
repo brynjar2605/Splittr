@@ -8,9 +8,8 @@ namespace splittr
 namespace
 {
     constexpr int gripWidth = 26;
-    constexpr int padX = 10, padY = 6;
-    constexpr int titleRowHeight = 16;
-    constexpr int titleGap = 4;
+    constexpr int padX = 10;
+    constexpr int titleRowHeight = 16; // fixed: the name/peak/transport strip
     constexpr int scrubberWidth = 60;
     constexpr int muteSize = 16;
     constexpr int elapsedWidth = 26;
@@ -53,9 +52,21 @@ void StemRowComponent::update (const juce::File& file, const std::vector<float>&
     repaint();
 }
 
+// Seven rows only fit by giving up vertical padding; the title strip stays put
+// and the waveform absorbs the rest of the loss.
+int StemRowComponent::verticalPad() const
+{
+    return getHeight() < compactBelow ? 4 : 6;
+}
+
+int StemRowComponent::titleGap() const
+{
+    return getHeight() < compactBelow ? 2 : 4;
+}
+
 juce::Rectangle<int> StemRowComponent::muteButtonBounds() const
 {
-    const auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, padY);
+    const auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, verticalPad());
     const auto x = body.getRight() - elapsedWidth - 8 - scrubberWidth - 8 - muteSize;
     return { x, body.getY(), muteSize, muteSize };
 }
@@ -68,8 +79,8 @@ juce::Rectangle<int> StemRowComponent::scrubberBounds() const
 
 juce::Rectangle<int> StemRowComponent::waveformBounds() const
 {
-    auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, padY);
-    body.removeFromTop (titleRowHeight + titleGap);
+    auto body = getLocalBounds().withTrimmedLeft (gripWidth).reduced (padX, verticalPad());
+    body.removeFromTop (titleRowHeight + titleGap());
     return body;
 }
 
@@ -107,7 +118,7 @@ void StemRowComponent::paint (juce::Graphics& g)
                 g.fillEllipse (cx + (float) col * 4.0f, cy + (float) row * 4.0f, 1.5f, 1.5f);
     }
 
-    auto body = bounds.reduced (padX, padY);
+    auto body = bounds.reduced (padX, verticalPad());
 
     // --- title row: name + peak, transport on the right ---
     auto titleRow = body.removeFromTop (titleRowHeight);
@@ -206,7 +217,7 @@ void StemRowComponent::paint (juce::Graphics& g)
                 }
             }
 
-            // Shared playhead: the same line on every row ties the five together.
+            // Shared playhead: the same line on every row ties them together.
             if (playing)
             {
                 g.setColour (theme::accentMid);

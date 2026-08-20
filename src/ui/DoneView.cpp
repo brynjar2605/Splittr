@@ -6,23 +6,49 @@ namespace splittr
 
 namespace
 {
-    constexpr int padX = 16, padY = 14, rowGap = 6;
+    constexpr int padX = 16, padY = 14;
     constexpr int footerHeight = 13;
+
+    // Five rows keep the design's 53px and its 6px gutter; seven only fit by
+    // halving the gutter, which lands them at ~40px.
+    constexpr int wideRowGap = 6, tightRowGap = 3;
+    constexpr int tightAbove = 5; // row counts above this use the tight gutter
 } // namespace
 
-DoneView::DoneView()
+DoneView::DoneView() = default;
+
+void DoneView::rebuildRows (const std::vector<EngineSnapshot::StemInfo>& stems)
 {
-    for (int i = 0; i < numStems; ++i)
+    juce::StringArray names;
+
+    for (const auto& stem : stems)
+        names.add (stem.name);
+
+    if (names == rowNames)
+        return;
+
+    rowNames = names;
+    rows.clear();
+
+    for (int i = 0; i < names.size(); ++i)
     {
-        auto* r = rows.add (new StemRowComponent (juce::String (stemName (i)).toUpperCase(),
-                                                  i == stemVocals));
+        auto* r = rows.add (new StemRowComponent (names[i].toUpperCase(),
+                                                  stems[(size_t) i].kind == stemVocals));
+
+        r->onMuteToggle = [this, i] { if (onMuteToggle != nullptr) onMuteToggle (i); };
+        r->onSeek = [this, i] (double f) { if (onSeek != nullptr) onSeek (i, f); };
+
         addAndMakeVisible (r);
     }
+
+    resized();
 }
 
 void DoneView::update (const EngineSnapshot& s, bool isPlaying)
 {
     const auto dot = juce::String::fromUTF8 (" \xc2\xb7 ");
+
+    rebuildRows (s.stems);
 
     playing = isPlaying;
     statsText.clear();
@@ -40,9 +66,20 @@ void DoneView::resized()
 {
     auto area = getLocalBounds().reduced (padX, padY);
 
+    const auto count = rows.size();
+
+    if (count <= 0)
+        return;
+
+    // Rows and their gutters share what the footer leaves; the design height
+    // is the ceiling, so five rows are unchanged and seven shrink to fit.
+    rowGap = count > tightAbove ? tightRowGap : wideRowGap;
+    rowHeight = juce::jlimit (24, StemRowComponent::maxRowHeight,
+                              (area.getHeight() - footerHeight - count * rowGap) / count);
+
     for (auto* r : rows)
     {
-        r->setBounds (area.removeFromTop (StemRowComponent::rowHeight));
+        r->setBounds (area.removeFromTop (rowHeight));
         area.removeFromTop (rowGap);
     }
 }
@@ -67,7 +104,7 @@ void DoneView::paint (juce::Graphics& g)
         return r;
     };
 
-    // Leftmost: the one global transport control for all five stems.
+    // Leftmost: the one global transport control for every stem.
     playBounds = drawAction (playing ? "PAUSE" : "PLAY", 4,
                              playing ? theme::accentSoft : theme::text50);
 

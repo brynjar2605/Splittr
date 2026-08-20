@@ -11,24 +11,41 @@ juce::File StemCache::cacheRoot()
 
 juce::String StemCache::keyFor (const juce::File& source, Quality quality)
 {
+    const auto qualityToken = quality == Quality::best      ? "|ft"
+                              : quality == Quality::sixStem ? "|6s"
+                                                            : "";
+
     const auto identity = source.getFullPathName()
                           + "|" + juce::String (source.getSize())
                           + "|" + juce::String (source.getLastModificationTime().toMilliseconds())
-                          + (quality == Quality::best ? "|ft" : "");
+                          + qualityToken;
 
     return juce::String::toHexString (identity.hashCode64());
 }
 
-CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
+CachedStems StemCache::entryIn (const juce::File& dir, const juce::StringArray& stemNames)
 {
     CachedStems entry;
-    entry.dir = cacheRoot().getChildFile (keyFor (source, quality));
+    entry.dir = dir;
 
-    for (int i = 0; i < numStems; ++i)
-        entry.stems[(size_t) i] = entry.dir.getChildFile (juce::String (stemName (i)) + ".wav");
+    for (const auto& name : stemNames)
+    {
+        entry.names.push_back (name);
+        entry.stems.push_back (dir.getChildFile (name + ".wav"));
+    }
 
-    entry.meta = entry.dir.getChildFile ("meta.xml");
+    entry.meta = dir.getChildFile ("meta.xml");
     return entry;
+}
+
+CachedStems StemCache::entryFor (const juce::File& source, Quality quality)
+{
+    juce::StringArray names;
+
+    for (auto kind : stemOrderFor (quality))
+        names.add (stemName (kind));
+
+    return entryIn (cacheRoot().getChildFile (keyFor (source, quality)), names);
 }
 
 bool StemCache::isInsideCache (const juce::File& file)
@@ -41,11 +58,15 @@ void StemCache::prune (juce::int64 maxBytes)
 {
     auto entries = cacheRoot().findChildFiles (juce::File::findDirectories, false);
 
+    // Sum every rendered WAV rather than a fixed stem list: an entry's stem set
+    // depends on the mode that wrote it.
     const auto entryBytes = [] (const juce::File& dir)
     {
         juce::int64 bytes = 0;
-        for (int i = 0; i < numStems; ++i)
-            bytes += dir.getChildFile (juce::String (stemName (i)) + ".wav").getSize();
+
+        for (const auto& wav : dir.findChildFiles (juce::File::findFiles, false, "*.wav"))
+            bytes += wav.getSize();
+
         return bytes;
     };
 

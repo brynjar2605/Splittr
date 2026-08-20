@@ -6,14 +6,18 @@
 namespace splittr
 {
 
-// One draggable stem row (done state, compact 53px variant): grip dot-grid,
-// name + peak, mute toggle + scrubber, waveform. Press-and-drag anywhere that
-// isn't the transport starts an external file drag of the rendered WAV.
+// One draggable stem row (done state): grip dot-grid, name + peak, mute toggle
+// + scrubber, waveform. Press-and-drag anywhere that isn't the transport starts
+// an external file drag of the rendered WAV.
 //
-// All five stems share one transport, so the row only reports intent: the
-// circle toggles this stem's mute, a plain click on the waveform (mouse-up
-// under 5px of travel) seeks the shared transport, and the 60px scrubber
-// drag-scrubs it. Anything with real travel is still the file drag-out.
+// The row renders to whatever height DoneView gives it — 53px for the five-stem
+// set, ~40px when seven have to fit. The 16px title strip is fixed; the
+// waveform takes what is left, and the vertical padding tightens below 46px.
+//
+// All stems share one transport, so the row only reports intent: the circle
+// toggles this stem's mute, a plain click on the waveform (mouse-up under 5px
+// of travel) seeks the shared transport, and the 60px scrubber drag-scrubs it.
+// Anything with real travel is still the file drag-out.
 class StemRowComponent : public juce::Component
 {
 public:
@@ -34,7 +38,10 @@ public:
     void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
 
-    static constexpr int rowHeight = 53;
+    // The tallest row DoneView ever hands out, and the point below which the
+    // padding tightens to keep the waveform legible.
+    static constexpr int maxRowHeight = 53;
+    static constexpr int compactBelow = 46;
 
     // True while any row is running an external file drag. The editor checks
     // this to refuse file drops, so a stem dragged out and released over the
@@ -46,9 +53,12 @@ private:
     juce::Rectangle<int> scrubberBounds() const;
     juce::Rectangle<int> waveformBounds() const;
 
+    int verticalPad() const;  // tightens on short rows
+    int titleGap() const;     // ditto
+
     const juce::String name;
     const bool accent;
-    const int emberRow; // per-row ember seed, so the five rows don't flicker in step
+    const int emberRow; // per-row ember seed, so the rows don't flicker in step
 
     juce::File wavFile;
     std::vector<float> wave;

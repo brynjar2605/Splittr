@@ -4,7 +4,7 @@ namespace splittr
 {
 
 // ---------------------------------------------------------------------------
-// Five stereo readers as one 10-channel positionable stream. Every method runs
+// The stereo readers as one multi-channel positionable stream. Every method runs
 // either on the message thread (open/prepare, before the transport is handed
 // the source) or on the transport's read-ahead TimeSliceThread -- never on the
 // audio thread, which sees only the buffered result.
@@ -16,7 +16,9 @@ public:
     // Returns false when not a single stem could be opened.
     bool open (juce::AudioFormatManager& fm, const StemFiles& files)
     {
-        for (int i = 0; i < numStems; ++i)
+        count = juce::jmin (maxStems, (int) files.size());
+
+        for (int i = 0; i < count; ++i)
         {
             if (auto* reader = fm.createReaderFor (files[(size_t) i]))
             {
@@ -30,6 +32,7 @@ public:
     }
 
     double sourceSampleRate() const { return rate; }
+    int numStems() const { return count; }
 
     void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override
     {
@@ -49,7 +52,9 @@ public:
     {
         const auto numOut = info.buffer->getNumChannels();
 
-        for (int s = 0; s < numStems; ++s)
+        // Every slot up to the full stream width is visited: the ones past the
+        // loaded stem count have no reader and are cleared.
+        for (int s = 0; s < maxStems; ++s)
         {
             const auto left = s * 2, right = s * 2 + 1;
 
@@ -92,10 +97,11 @@ public:
     void setLooping (bool) override {}
 
 private:
-    std::array<std::unique_ptr<juce::AudioFormatReaderSource>, numStems> readers;
+    std::array<std::unique_ptr<juce::AudioFormatReaderSource>, maxStems> readers;
     std::atomic<juce::int64> position { 0 };
     juce::int64 length = 0;
     double rate = 0.0;
+    int count = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -123,7 +129,7 @@ void AuditionPlayer::prepareToPlay (double sampleRate, int samplesPerBlock)
     hostBlockSize = juce::jmax (16, samplesPerBlock);
     temp.setSize (mixChannels, hostBlockSize);
 
-    for (int i = 0; i < numStems; ++i)
+    for (int i = 0; i < maxStems; ++i)
     {
         gain[(size_t) i].reset (hostRate, muteRampSeconds);
         gain[(size_t) i].setCurrentAndTargetValue (muted[(size_t) i].load() ? 0.0f : 1.0f);
@@ -147,6 +153,7 @@ void AuditionPlayer::processAddTo (juce::AudioBuffer<float>& buffer)
     const auto numSamples = buffer.getNumSamples();
     const auto numOut = buffer.getNumChannels();
     const auto tempSamples = temp.getNumSamples();
+    const auto numStems = activeStems.load (std::memory_order_relaxed);
 
     for (int s = 0; s < numStems; ++s)
         gain[(size_t) s].setTargetValue (muted[(size_t) s].load (std::memory_order_relaxed) ? 0.0f : 1.0f);
@@ -200,6 +207,7 @@ bool AuditionPlayer::load (const StemFiles& files)
         return false;
 
     const auto fileRate = source->sourceSampleRate();
+    const auto stemCount = source->numStems();
     mixer = std::move (source);
 
     transport.setSource (mixer.get(), readAheadSamples, &readAhead, fileRate, mixChannels);
@@ -209,10 +217,11 @@ bool AuditionPlayer::load (const StemFiles& files)
 
     transport.setPosition (0.0);
 
-    for (int i = 0; i < numStems; ++i)
+    for (int i = 0; i < maxStems; ++i)
         gain[(size_t) i].setCurrentAndTargetValue (muted[(size_t) i].load() ? 0.0f : 1.0f);
 
     openFiles = files;
+    activeStems.store (stemCount);
     loaded.store (true);
     return true;
 }
@@ -234,10 +243,11 @@ void AuditionPlayer::togglePlay (const StemFiles& files)
 void AuditionPlayer::stop()
 {
     loaded.store (false);
+    activeStems.store (0);
     transport.stop();
     transport.setSource (nullptr);
     mixer.reset();
-    openFiles = {};
+    openFiles.clear();
 }
 
 void AuditionPlayer::seekFraction (double fraction01)
@@ -254,13 +264,13 @@ void AuditionPlayer::stopIfFinished()
 
 void AuditionPlayer::setMuted (int stem, bool shouldBeMuted)
 {
-    if (juce::isPositiveAndBelow (stem, (int) numStems))
+    if (juce::isPositiveAndBelow (stem, (int) maxStems))
         muted[(size_t) stem].store (shouldBeMuted);
 }
 
 bool AuditionPlayer::isMuted (int stem) const
 {
-    return juce::isPositiveAndBelow (stem, (int) numStems) && muted[(size_t) stem].load();
+    return juce::isPositiveAndBelow (stem, (int) maxStems) && muted[(size_t) stem].load();
 }
 
 bool AuditionPlayer::isPlaying() const

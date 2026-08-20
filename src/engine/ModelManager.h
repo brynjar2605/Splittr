@@ -7,10 +7,12 @@ namespace splittr
 {
 
 // Quality vs speed:
-//   fast = htdemucs 4-source, one model, ~realtime
-//   best = htdemucs_ft ensemble, four fine-tuned models (one per source),
-//          noticeably better separation at ~4x the inference cost
-enum class Quality { fast, best };
+//   fast    = htdemucs 4-source, one model, ~realtime
+//   best    = htdemucs_ft ensemble, four fine-tuned models (one per source),
+//             noticeably better separation at ~4x the inference cost
+//   sixStem = htdemucs_6s, one model, adds guitar and piano to the four
+//             standard sources (those two are the weaker targets upstream)
+enum class Quality { fast, best, sixStem };
 
 // Resolves, remembers and describes the ggml weight files.
 class ModelManager
@@ -22,8 +24,14 @@ public:
     static constexpr const char* baseUrl =
         "https://huggingface.co/datasets/Retrobear/demucs.cpp/resolve/main/";
 
-    // All htdemucs 4-source variants share one architecture => one size.
-    static constexpr juce::int64 bytesPerModel = 83994361;
+    // Expected on-disk size, per weight file. All htdemucs 4-source variants
+    // share one architecture and one size; the 6-source export is a different
+    // (smaller) file, so the download size check has to be per file.
+    static constexpr juce::int64 bytes4Source = 83994361;
+    static constexpr juce::int64 bytes6Source = 54855129;
+
+    static juce::int64 expectedBytes (const juce::String& filename);
+    static juce::int64 expectedBytesFor (Quality); // whole set
 
     // For Quality::best the order matches the htdemucs target order:
     // drums, bass, other, vocals (upstream demucs_ft mapping).
@@ -35,6 +43,9 @@ public:
 
     Quality quality() const;
     void setQuality (Quality);
+
+    // Settings.xml / meta.xml spelling of a mode ("fast", "best", "6s").
+    static juce::String qualityToken (Quality);
 
     // Local paths for the given quality; a file from the user-located
     // directory wins over the managed models dir.

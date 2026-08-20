@@ -42,6 +42,7 @@ namespace
                                         const demucscpp::ProgressCallback& sharedCb)
     {
         const auto total = (int) audio.cols();
+        const auto numSources = model.is_4sources ? 4 : 6;
 
         if (numChunks <= 1)
             return demucscpp::demucs_inference (model, audio, sharedCb);
@@ -141,7 +142,7 @@ namespace
             throw CancelledException {};
 
         // --- crossfade-stitch ---
-        Eigen::Tensor3dXf result (4, 2, total);
+        Eigen::Tensor3dXf result (numSources, 2, total);
         result.setZero();
 
         std::vector<float> weightSum ((size_t) total, 0.0f);
@@ -164,7 +165,7 @@ namespace
                 else if (j >= paddedLen - kOverlapSamples)
                     w = (float) (paddedLen - j) / (float) (kOverlapSamples + 1);
 
-                for (int t = 0; t < 4; ++t)
+                for (int t = 0; t < numSources; ++t)
                     for (int ch = 0; ch < 2; ++ch)
                         result (t, ch, g) += outs[(size_t) i] (t, ch, j) * w;
 
@@ -174,7 +175,7 @@ namespace
 
         for (int g = 0; g < total; ++g)
             if (weightSum[(size_t) g] > 0.0f)
-                for (int t = 0; t < 4; ++t)
+                for (int t = 0; t < numSources; ++t)
                     for (int ch = 0; ch < 2; ++ch)
                         result (t, ch, g) /= weightSum[(size_t) g];
 
@@ -231,6 +232,7 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
 
     const auto numModels = (int) modelFiles.size();
     Eigen::Tensor3dXf targets;
+    auto numSources = 0;
 
     try
     {
@@ -246,9 +248,21 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
                 return Status::failed;
             }
 
-            if (! model.is_4sources)
+            const auto modelSources = model.is_4sources ? 4 : 6;
+
+            // The fine-tuned ensemble is a set of 4-source specialists; there
+            // is no 6-source equivalent, so mixing the two is a caller bug.
+            if (numModels > 1 && modelSources != 4)
             {
-                error = "Expected a 4-source htdemucs model";
+                error = "Expected a 4-source htdemucs model in the fine-tuned ensemble";
+                return Status::failed;
+            }
+
+            if (m == 0)
+                numSources = modelSources;
+            else if (modelSources != numSources)
+            {
+                error = "Model set mixes 4-source and 6-source weights";
                 return Status::failed;
             }
 
@@ -269,7 +283,7 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
                 // Fine-tuned specialist m contributes only target m.
                 if (targets.size() == 0)
                 {
-                    targets = Eigen::Tensor3dXf (4, 2, numSamples);
+                    targets = Eigen::Tensor3dXf (numSources, 2, numSamples);
                     targets.setZero();
                 }
 
@@ -289,48 +303,61 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
         return Status::failed;
     }
 
-    out.vocals.setSize (2, numSamples);
-    out.drums.setSize (2, numSamples);
-    out.bass.setSize (2, numSamples);
-    out.other.setSize (2, numSamples);
-    out.instrumental.setSize (2, numSamples);
+    // --- lay the separated sources out in display order -------------------
+    const auto& order = stemOrderForSources (numSources);
+    const auto numStems = (int) order.size();
 
-    std::array<float, 4> peaks {};
-    float instrumentalPeak = 0.0f;
+    out.numSources = numSources;
+    out.kinds = order;
+    out.stems.assign ((size_t) numStems, {});
+    out.peaksDb.assign ((size_t) numStems, -120.0f);
 
-    for (int ch = 0; ch < 2; ++ch)
+    std::vector<float> peaks ((size_t) numStems, 0.0f);
+
+    for (auto& buffer : out.stems)
+        buffer.setSize (2, numSamples);
+
+    for (int s = 0; s < numStems; ++s)
     {
-        auto* vocals = out.vocals.getWritePointer (ch);
-        auto* drumsOut = out.drums.getWritePointer (ch);
-        auto* bassOut = out.bass.getWritePointer (ch);
-        auto* otherOut = out.other.getWritePointer (ch);
-        auto* instrumental = out.instrumental.getWritePointer (ch);
+        const auto kind = order[(size_t) s];
+        auto& buffer = out.stems[(size_t) s];
 
-        for (int i = 0; i < numSamples; ++i)
+        for (int ch = 0; ch < 2; ++ch)
         {
-            const float drums = targets (0, ch, i);
-            const float bass = targets (1, ch, i);
-            const float other = targets (2, ch, i);
-            const float vox = targets (3, ch, i);
+            auto* dest = buffer.getWritePointer (ch);
 
-            vocals[i] = vox;
-            drumsOut[i] = drums;
-            bassOut[i] = bass;
-            otherOut[i] = other;
-            instrumental[i] = drums + bass + other;
+            if (kind == stemInstrumental)
+            {
+                // Everything that isn't the voice, whichever mode we are in:
+                // drums + bass + other, plus guitar + piano for htdemucs_6s.
+                const auto vocalSource = sourceForStemKind (stemVocals);
 
-            peaks[0] = juce::jmax (peaks[0], std::abs (drums));
-            peaks[1] = juce::jmax (peaks[1], std::abs (bass));
-            peaks[2] = juce::jmax (peaks[2], std::abs (other));
-            peaks[3] = juce::jmax (peaks[3], std::abs (vox));
-            instrumentalPeak = juce::jmax (instrumentalPeak, std::abs (instrumental[i]));
+                for (int i = 0; i < numSamples; ++i)
+                    dest[i] = 0.0f;
+
+                for (int src = 0; src < numSources; ++src)
+                {
+                    if (src == vocalSource)
+                        continue;
+
+                    for (int i = 0; i < numSamples; ++i)
+                        dest[i] += targets (src, ch, i);
+                }
+            }
+            else
+            {
+                const auto src = sourceForStemKind (kind);
+
+                for (int i = 0; i < numSamples; ++i)
+                    dest[i] = targets (src, ch, i);
+            }
+
+            for (int i = 0; i < numSamples; ++i)
+                peaks[(size_t) s] = juce::jmax (peaks[(size_t) s], std::abs (dest[i]));
         }
+
+        out.peaksDb[(size_t) s] = peakToDb (peaks[(size_t) s]);
     }
-
-    for (size_t s = 0; s < peaks.size(); ++s)
-        out.sourcePeaksDb[s] = peakToDb (peaks[s]);
-
-    out.instrumentalPeakDb = peakToDb (instrumentalPeak);
 
     return Status::ok;
 }

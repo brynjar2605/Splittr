@@ -25,6 +25,39 @@ namespace
             values.push_back (part.getFloatValue());
         return values;
     }
+
+    // Bumped to 4 when the stem set became variable: an entry now records the
+    // stems it holds, so it can be reopened without consulting the current
+    // engine mode. (3: normalised, sqrt-mapped waveform columns.)
+    constexpr int metaVersion = 4;
+
+    // An entry is usable only when its meta is the current version and every
+    // stem it names is still on disk. On success `entry` is re-pointed at the
+    // recorded stem set. Both the republish path and the editor's
+    // "is this an instant hit?" check go through here, so they cannot disagree.
+    std::unique_ptr<juce::XmlElement> openCachedEntry (const juce::File& source, Quality quality,
+                                                       CachedStems& entry,
+                                                       juce::StringArray& stemNames)
+    {
+        entry = StemCache::entryFor (source, quality);
+
+        if (! entry.meta.existsAsFile())
+            return nullptr;
+
+        auto xml = juce::parseXML (entry.meta);
+
+        if (xml == nullptr || xml->getIntAttribute ("version") != metaVersion)
+            return nullptr;
+
+        stemNames = juce::StringArray::fromTokens (xml->getStringAttribute ("stems"), ",", {});
+
+        if (stemNames.isEmpty())
+            return nullptr;
+
+        entry = StemCache::entryIn (entry.dir, stemNames);
+
+        return entry.complete() ? std::move (xml) : nullptr;
+    }
 } // namespace
 
 //==============================================================================
@@ -36,8 +69,9 @@ public:
     DownloadJob (SeparationEngine& e, int gen, Quality q)
         : ThreadPoolJob ("model download"), engine (e), generation (gen), quality (q) {}
 
-    // Fetch every missing weight file for `quality` (1 for fast, up to 4 for
-    // best), with progress aggregated across files by bytes.
+    // Fetch every missing weight file for `quality` (1 for fast and 6-stem, up
+    // to 4 for best), with progress aggregated across files by bytes. Sizes are
+    // per file: the 6-source export is not the same size as the 4-source ones.
     static DownloadOutcome download (juce::ThreadPoolJob& job, SeparationEngine& engine,
                                      int gen, Quality quality, juce::String& error)
     {
@@ -48,7 +82,11 @@ public:
         if (missing.empty())
             return DownloadOutcome::ok;
 
-        const auto totalBytes = (juce::int64) missing.size() * ModelManager::bytesPerModel;
+        juce::int64 totalBytes = 0;
+
+        for (const auto& missingFile : missing)
+            totalBytes += ModelManager::expectedBytes (missingFile.getFileName());
+
         juce::int64 doneBytes = 0;
 
         const auto startMs = juce::Time::getMillisecondCounterHiRes();
@@ -58,6 +96,7 @@ public:
             // Always download into the managed models dir (the user-located
             // dir stays read-only for us).
             const auto target = ModelManager::modelsDir().getChildFile (missingFile.getFileName());
+            const auto expectedBytes = ModelManager::expectedBytes (target.getFileName());
             auto part = target.getSiblingFile (target.getFileName() + ".part");
             part.deleteFile();
 
@@ -94,7 +133,7 @@ public:
                 });
             }
 
-            if (task->hadError() || part.getSize() != ModelManager::bytesPerModel)
+            if (task->hadError() || part.getSize() != expectedBytes)
             {
                 part.deleteFile();
                 error = task->hadError() ? "DOWNLOAD FAILED — CHECK CONNECTION"
@@ -111,7 +150,7 @@ public:
                 return DownloadOutcome::failed;
             }
 
-            doneBytes += ModelManager::bytesPerModel;
+            doneBytes += expectedBytes;
         }
 
         return DownloadOutcome::ok;
@@ -220,7 +259,7 @@ public:
 
         auto sourceWave = AudioFileIO::peakColumns (decoded.buffer, 60);
         const auto duration = decoded.durationSeconds;
-        const auto numModels = quality == Quality::best ? 4 : 1;
+        const auto numModels = (int) engine.models.filesFor (quality).size();
         const auto segmentCount = numModels * DemucsSeparator::expectedSegments (decoded.buffer.getNumSamples());
 
         const auto analysis = TrackAnalyzer::analyze (decoded.buffer);
@@ -272,6 +311,12 @@ public:
 
         const auto inferenceSeconds = (juce::Time::getMillisecondCounterHiRes() - inferenceStart) / 1000.0;
 
+        // The weights decide how many sources came back; if that disagrees with
+        // the mode the user picked, the model set on disk is not what its
+        // filename claims.
+        if (result.numSources != sourceCountFor (quality))
+            return fail ("MODEL DOES NOT MATCH ENGINE MODE");
+
         // --- render + cache -----------------------------------------------
         engine.mutate (generation, [] (EngineSnapshot& s)
         {
@@ -282,36 +327,35 @@ public:
         auto entry = StemCache::entryFor (source, quality);
         entry.dir.createDirectory();
 
-        const juce::AudioBuffer<float>* buffers[numStems] = {
-            &result.vocals, &result.drums, &result.bass, &result.other, &result.instrumental
-        };
+        const auto numStems = (int) result.stems.size();
 
-        // StemIndex order; peaks come from the source order drums,bass,other,vocals.
-        const float stemPeaksDb[numStems] = {
-            result.sourcePeaksDb[3], result.sourcePeaksDb[0], result.sourcePeaksDb[1],
-            result.sourcePeaksDb[2], result.instrumentalPeakDb
-        };
+        jassert (numStems == (int) entry.stems.size());
 
-        std::array<std::vector<float>, numStems> waves;
+        std::vector<std::vector<float>> waves ((size_t) numStems);
 
         for (int i = 0; i < numStems; ++i)
         {
-            if (! engine.io.writeWavFloat32 (entry.stems[(size_t) i], *buffers[i],
+            if (! engine.io.writeWavFloat32 (entry.stems[(size_t) i], result.stems[(size_t) i],
                                              AudioFileIO::kTargetSampleRate, error))
             {
                 entry.dir.deleteRecursively();
                 return fail ("COULD NOT WRITE STEMS");
             }
 
-            waves[(size_t) i] = AudioFileIO::peakColumns (*buffers[i], 70);
+            waves[(size_t) i] = AudioFileIO::peakColumns (result.stems[(size_t) i], 70);
         }
 
         const auto rtFactor = inferenceSeconds > 0 ? duration / inferenceSeconds : 0.0;
 
+        juce::StringArray stemNames;
+        for (auto kind : result.kinds)
+            stemNames.add (stemName (kind));
+
         juce::XmlElement meta ("SplittrStems");
-        meta.setAttribute ("version", 3); // 3: normalised, sqrt-mapped waveform columns
+        meta.setAttribute ("version", metaVersion);
         meta.setAttribute ("sourcePath", source.getFullPathName());
-        meta.setAttribute ("quality", quality == Quality::best ? "best" : "fast");
+        meta.setAttribute ("quality", ModelManager::qualityToken (quality));
+        meta.setAttribute ("stems", stemNames.joinIntoString (","));
         meta.setAttribute ("duration", duration);
         meta.setAttribute ("inferenceSeconds", inferenceSeconds);
         meta.setAttribute ("realtimeFactor", rtFactor);
@@ -321,8 +365,8 @@ public:
 
         for (int i = 0; i < numStems; ++i)
         {
-            meta.setAttribute ("wave" + juce::String (stemName (i)), metaCsv (waves[(size_t) i]));
-            meta.setAttribute ("peak" + juce::String (stemName (i)), (double) stemPeaksDb[i]);
+            meta.setAttribute ("wave" + stemNames[i], metaCsv (waves[(size_t) i]));
+            meta.setAttribute ("peak" + stemNames[i], (double) result.peaksDb[(size_t) i]);
         }
 
         meta.writeTo (entry.meta);
@@ -333,15 +377,24 @@ public:
         {
             s.phase = Phase::Ready;
             s.progress = 1.0f;
+            s.stems.clear();
 
             for (int i = 0; i < numStems; ++i)
             {
-                s.stems[(size_t) i].wav = entry.stems[(size_t) i];
-                s.stems[(size_t) i].waveform = waves[(size_t) i];
-                s.stems[(size_t) i].peakDb = stemPeaksDb[i];
+                EngineSnapshot::StemInfo info;
+                info.kind = result.kinds[(size_t) i];
+                info.name = stemNames[i];
+                info.wav = entry.stems[(size_t) i];
+                info.waveform = waves[(size_t) i];
+                info.peakDb = result.peaksDb[(size_t) i];
+                s.stems.push_back (std::move (info));
             }
 
-            s.sourcePeaksDb = result.sourcePeaksDb;
+            s.sourcePeaksDb.clear();
+
+            for (int src = 0; src < result.numSources; ++src)
+                s.sourcePeaksDb.push_back (result.sourcePeakDb (src));
+
             s.peaksKnown = true;
             s.inferenceSeconds = inferenceSeconds;
             s.realtimeFactor = rtFactor;
@@ -414,8 +467,11 @@ void SeparationEngine::startModelDownload()
         snapshot.message.clear();
         snapshot.progress = 0.0f;
         snapshot.downloadDone = 0;
-        snapshot.downloadTotal = (juce::int64) models.missingFor (quality).size()
-                                 * ModelManager::bytesPerModel;
+        snapshot.downloadTotal = 0;
+
+        for (const auto& file : models.missingFor (quality))
+            snapshot.downloadTotal += ModelManager::expectedBytes (file.getFileName());
+
         snapshot.downloadMBps = 0.0;
     }
 
@@ -458,17 +514,27 @@ void SeparationEngine::setQuality (Quality q)
     }
 }
 
+bool SeparationEngine::hasCachedResult (const juce::File& source) const
+{
+    CachedStems entry;
+    juce::StringArray stemNames;
+
+    return openCachedEntry (source, models.quality(), entry, stemNames) != nullptr;
+}
+
 bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Quality quality)
 {
-    const auto entry = StemCache::entryFor (source, quality);
+    // The entry names its own stems, so a cached run is reopened by what it
+    // actually holds rather than by whatever mode happens to be selected.
+    CachedStems entry;
+    juce::StringArray stemNames;
 
-    if (! entry.complete())
+    const auto xml = openCachedEntry (source, quality, entry, stemNames);
+
+    if (xml == nullptr)
         return false;
 
-    auto xml = juce::parseXML (entry.meta);
-
-    if (xml == nullptr || xml->getIntAttribute ("version") != 3)
-        return false;
+    const auto numSources = stemNames.size() - 1; // every stem but the instrumental
 
     mutate (gen, [&] (EngineSnapshot& s)
     {
@@ -478,17 +544,35 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
         s.sourceFile = source;
         s.sourceDuration = xml->getDoubleAttribute ("duration");
         s.sourceWaveform = metaUncsv (xml->getStringAttribute ("sourceWave"));
+        s.stems.clear();
 
-        for (int i = 0; i < numStems; ++i)
+        for (int i = 0; i < stemNames.size(); ++i)
         {
-            s.stems[(size_t) i].wav = entry.stems[(size_t) i];
-            s.stems[(size_t) i].waveform = metaUncsv (xml->getStringAttribute ("wave" + juce::String (stemName (i))));
-            s.stems[(size_t) i].peakDb = (float) xml->getDoubleAttribute ("peak" + juce::String (stemName (i)), -120.0);
+            EngineSnapshot::StemInfo info;
+            info.kind = stemKindNamed (stemNames[i]);
+            info.name = stemNames[i];
+            info.wav = entry.stems[(size_t) i];
+            info.waveform = metaUncsv (xml->getStringAttribute ("wave" + stemNames[i]));
+            info.peakDb = (float) xml->getDoubleAttribute ("peak" + stemNames[i], -120.0);
+            s.stems.push_back (std::move (info));
         }
 
-        // source order drums,bass,other,vocals for the working table
-        s.sourcePeaksDb = { s.stems[stemDrums].peakDb, s.stems[stemBass].peakDb,
-                            s.stems[stemOther].peakDb, s.stems[stemVocals].peakDb };
+        // demucs source order (drums, bass, other, vocals[, guitar, piano])
+        // for the working table.
+        s.sourcePeaksDb.clear();
+
+        for (int src = 0; src < numSources; ++src)
+        {
+            const auto kind = stemKindForSource (src);
+            auto peak = -120.0f;
+
+            for (const auto& stem : s.stems)
+                if (stem.kind == kind)
+                    peak = stem.peakDb;
+
+            s.sourcePeaksDb.push_back (peak);
+        }
+
         s.peaksKnown = true;
         s.inferenceSeconds = xml->getDoubleAttribute ("inferenceSeconds");
         s.realtimeFactor = xml->getDoubleAttribute ("realtimeFactor");
