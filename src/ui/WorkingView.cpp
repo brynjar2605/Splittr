@@ -16,12 +16,13 @@ namespace
         const char* role;
     };
 
-    // Design order: vocals first.
+    // Design order: vocals first. Since the 5-stem update every source is its
+    // own stem; drums/bass/other are additionally summed into the instrumental.
     constexpr SourceRow sourceRows[] = {
         { "vocals", 3, "stem 1" },
-        { "drums", 0, "sum \xe2\x86\x92 stem 2" },
-        { "bass", 1, "sum \xe2\x86\x92 stem 2" },
-        { "other", 2, "sum \xe2\x86\x92 stem 2" },
+        { "drums", 0, "stem 2 \xc2\xb7 +instrumental" },
+        { "bass", 1, "stem 3 \xc2\xb7 +instrumental" },
+        { "other", 2, "stem 4 \xc2\xb7 +instrumental" },
     };
 } // namespace
 
