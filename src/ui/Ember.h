@@ -74,10 +74,22 @@ inline float emberAlpha (const Ember& e, double clockSeconds, float ramp,
 //
 // This is the burned region's cost and nothing else's: callers must keep it
 // behind their `ramp > 0` test so columns ahead of the head stay one fillRect.
+//
+// `fine == false` restores the original coarse burn (issue #21's before-state,
+// kept as a setting): the whole bar is a single ember, no subdivision. The
+// matching base-bar dim for each grain lives in fireBaseDim().
 inline void paintEmberBar (juce::Graphics& g, juce::Colour colour,
                            juce::Rectangle<float> bar, int col, int seed,
-                           double clockSeconds, float ramp)
+                           double clockSeconds, float ramp, bool fine = true)
 {
+    if (! fine)
+    {
+        const auto e = emberFor (col, 0, seed);
+        g.setColour (colour.withAlpha (emberAlpha (e, clockSeconds, ramp, 0.0f)));
+        g.fillRect (bar);
+        return;
+    }
+
     constexpr float cellGap = 1.0f;
     constexpr float cellHeight = 2.0f; // MatrixBar's row height
 
@@ -103,6 +115,16 @@ inline void paintEmberBar (juce::Graphics& g, juce::Colour colour,
             g.fillRect (x, bar.getY() + (float) cell * (cellH + cellGap), subWidth, cellH);
         }
     }
+}
+
+// How hard the stem rows dim the base bar under the flame. The fine grain
+// covers ~55% of the bar, so the original 75% dim would read as erosion; the
+// coarse burn covers all of it and wants the original value. (The working
+// view keeps a flat 75% in both grains: green-on-near-dark defines its own
+// shape.)
+inline float fireBaseDim (bool fine) noexcept
+{
+    return fine ? 0.45f : 0.75f;
 }
 
 } // namespace splittr::ui

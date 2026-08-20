@@ -8,6 +8,7 @@ namespace
 {
     Mode mode = Mode::dark;
     float accentHue = -1.0f; // set on first apply/load
+    bool fineFireGrain = true;
 
     // The design's purple ladder; every accent is this shade with the hue
     // swapped for the user's choice (slightly darkened in light mode so the
@@ -25,6 +26,14 @@ namespace
 
 Mode currentMode() { return mode; }
 float currentAccentHue() { return accentHue >= 0.0f ? accentHue : defaultAccentHue(); }
+
+bool fineFire() { return fineFireGrain; }
+
+void setFineFire (bool fine)
+{
+    fineFireGrain = fine;
+    ModelManager::setUiSetting ("fireGrain", fine ? "fine" : "coarse");
+}
 
 float defaultAccentHue()
 {
@@ -87,6 +96,8 @@ void apply (Mode newMode, float newAccentHue, bool persist)
 
 void loadFromSettings()
 {
+    fineFireGrain = ModelManager::getUiSetting ("fireGrain", "fine") != "coarse";
+
     const auto m = ModelManager::getUiSetting ("uiMode", "dark") == "light" ? Mode::light : Mode::dark;
 
     auto hueSetting = ModelManager::getUiSetting ("uiAccentHue", "");

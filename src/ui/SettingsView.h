@@ -20,6 +20,7 @@ public:
 
     std::function<void (theme::Mode)> onModeChange;
     std::function<void (float, bool)> onAccentHueChange; // (hue 0..1, commit)
+    std::function<void (bool)> onFireGrainChange;        // true = fine grain
     std::function<void()> onClose;
 
     void paint (juce::Graphics&) override;
@@ -35,9 +36,10 @@ private:
 
     // computed in paint
     juce::Rectangle<int> darkBounds, lightBounds, hueStripBounds, closeBounds;
+    juce::Rectangle<int> fineBounds, coarseBounds;
 
     bool draggingHue = false;
-    int hoveredAction = 0; // 0 none, 1 dark, 2 light, 3 close
+    int hoveredAction = 0; // 0 none, 1 dark, 2 light, 3 close, 4 fine, 5 coarse
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsView)
 };

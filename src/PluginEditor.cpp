@@ -66,6 +66,12 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         repaint();
     };
 
+    settingsView.onFireGrainChange = [this] (bool fine)
+    {
+        splittr::theme::setFineFire (fine);
+        repaint();
+    };
+
     libraryView.onClose = [this] { showLibrary = false; };
 
     libraryView.onOpenEntry = [this, &engine, &audition] (juce::File cacheDir)

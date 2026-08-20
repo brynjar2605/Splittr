@@ -59,6 +59,11 @@ Mode currentMode();
 float currentAccentHue(); // 0..1 (juce hue); default = the design purple
 float defaultAccentHue();
 
+// Fire grain on the burning waveforms: fine (matrix-bar cells, the default)
+// or the original coarse one-ember-per-bar look. Persisted like the theme.
+bool fineFire();
+void setFineFire (bool);
+
 // Rebuild every token above for the given mode/accent hue. Callers must
 // repaint afterwards. persist=false skips the Settings.xml write (use for
 // live drag preview; commit with persist=true on release).

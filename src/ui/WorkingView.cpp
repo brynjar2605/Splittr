@@ -141,7 +141,7 @@ void WorkingView::paint (juce::Graphics& g)
                 // Burned columns are diced into the matrix bar's grain rather
                 // than flickering whole; the ones ahead stay one fillRect.
                 if (ramp > 0.0f)
-                    ui::paintEmberBar (g, theme::scanEmber, { x, y, colW, h }, i, 0, clock, ramp);
+                    ui::paintEmberBar (g, theme::scanEmber, { x, y, colW, h }, i, 0, clock, ramp, theme::fineFire());
             }
         }
     }

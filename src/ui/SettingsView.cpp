@@ -6,7 +6,7 @@ namespace splittr
 
 namespace
 {
-    constexpr int panelWidth = 372, panelHeight = 168;
+    constexpr int panelWidth = 372, panelHeight = 202;
     constexpr int panelPad = 18;
     constexpr int titleHeight = 21, titleGap = 10;
     constexpr int rowGap = 12;
@@ -65,6 +65,19 @@ void SettingsView::paint (juce::Graphics& g)
         ui::drawHueStrip (g, hueStripBounds);
     }
 
+    body.removeFromTop (rowGap);
+
+    // --- FIRE: the burn grain on playing/scanning waveforms ---
+    {
+        const auto row = body.removeFromTop (ui::switchHeight);
+
+        ui::drawFieldLabel (g, "FIRE", row.getX(), row.getY());
+
+        std::tie (fineBounds, coarseBounds) =
+            ui::drawSwitch (g, row.getX() + labelColumn, row.getY(), "FINE", "COARSE",
+                            ! theme::fineFire(), hoveredAction, 4, 5, 54);
+    }
+
     // --- footer ---
     auto footer = panel.reduced (panelPad).removeFromBottom (ui::TagButton::idealHeight);
 
@@ -116,6 +129,14 @@ void SettingsView::mouseUp (const juce::MouseEvent& e)
         return;
     }
 
+    if (fineBounds.contains (p) || coarseBounds.contains (p))
+    {
+        if (onFireGrainChange != nullptr)
+            onFireGrainChange (fineBounds.contains (p));
+
+        return;
+    }
+
     // CLOSE, or a click on the scrim outside the panel.
     if ((closeBounds.contains (p) || ! panelBounds().contains (p)) && onClose != nullptr)
         onClose();
@@ -124,10 +145,12 @@ void SettingsView::mouseUp (const juce::MouseEvent& e)
 void SettingsView::mouseMove (const juce::MouseEvent& e)
 {
     const auto p = e.getPosition();
-    const auto action = darkBounds.contains (p)    ? 1
-                        : lightBounds.contains (p) ? 2
-                        : closeBounds.contains (p) ? 3
-                                                   : 0;
+    const auto action = darkBounds.contains (p)     ? 1
+                        : lightBounds.contains (p)  ? 2
+                        : closeBounds.contains (p)  ? 3
+                        : fineBounds.contains (p)   ? 4
+                        : coarseBounds.contains (p) ? 5
+                                                    : 0;
 
     const bool overStrip = hueStripBounds.contains (p);
 
