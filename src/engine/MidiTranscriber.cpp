@@ -77,8 +77,14 @@ namespace
     // Mono-sum a stem and land it at 22.05 kHz. The anti-alias filter runs
     // before the interpolator, which is what makes this a resample rather than
     // a decimation with the top octave folded back over the vocals.
+    //
+    // Streamed in blocks rather than read whole: a ten-minute stereo stem is
+    // 212 MB of float32 on disk, and materialising that plus its mono sum next
+    // to the model's own working set doubled the peak for nothing. Both the
+    // filters and the interpolator carry state across blocks, so the result is
+    // the same samples either way.
     bool readAsModelRate (const juce::File& wav, std::vector<float>& out,
-                          double& sourceSeconds, juce::String& error)
+                          juce::String& error)
     {
         juce::AudioFormatManager formats;
         formats.registerBasicFormats();
@@ -100,36 +106,24 @@ namespace
             return false;
         }
 
-        sourceSeconds = (double) numSamples / reader->sampleRate;
+        const auto ratio = reader->sampleRate / modelSampleRate;
+        const auto resampling = std::abs (ratio - 1.0) > 1.0e-9;
 
-        juce::AudioBuffer<float> buffer ((int) reader->numChannels, numSamples);
+        const auto outLength = (int) std::floor ((double) numSamples / ratio);
 
-        if (! reader->read (&buffer, 0, numSamples, 0, true, true))
+        if (outLength <= 0)
         {
-            error = "COULD NOT READ STEM";
+            error = "STEM IS TOO SHORT";
             return false;
         }
 
-        // LagrangeInterpolator reads a few samples past the last one it emits,
-        // so the mono buffer carries a short zero tail.
-        constexpr int guard = 8;
+        out.assign ((size_t) outLength, 0.0f);
 
-        std::vector<float> mono ((size_t) (numSamples + guard), 0.0f);
+        // Anti-alias before the interpolator sees anything. 0.98 of the target
+        // Nyquist leaves the Butterworth room to be down where it matters.
+        std::vector<juce::dsp::IIR::Filter<float>> lowpass;
 
-        {
-            const auto channels = buffer.getNumChannels();
-            const auto gain = 1.0f / (float) juce::jmax (1, channels);
-
-            for (int ch = 0; ch < channels; ++ch)
-            {
-                const auto* src = buffer.getReadPointer (ch);
-
-                for (int i = 0; i < numSamples; ++i)
-                    mono[(size_t) i] += src[i] * gain;
-            }
-        }
-
-        if (std::abs (reader->sampleRate - modelSampleRate) > 1.0e-6)
+        if (resampling)
         {
             const auto cutoff = (float) juce::jmin (modelSampleRate * 0.5,
                                                     reader->sampleRate * 0.5) * 0.98f;
@@ -138,35 +132,79 @@ namespace
                  juce::dsp::FilterDesign<float>::designIIRLowpassHighOrderButterworthMethod (
                      cutoff, reader->sampleRate, 4))
             {
-                juce::dsp::IIR::Filter<float> filter;
-                filter.coefficients = coefficients;
-                filter.reset();
-
-                for (int i = 0; i < numSamples; ++i)
-                    mono[(size_t) i] = filter.processSample (mono[(size_t) i]);
+                lowpass.emplace_back();
+                lowpass.back().coefficients = coefficients;
+                lowpass.back().reset();
             }
+        }
 
-            const auto ratio = reader->sampleRate / modelSampleRate;
-            const auto outLength = (int) std::floor ((double) numSamples / ratio);
+        constexpr int blockSize = 1 << 16;
 
-            if (outLength <= 0)
+        juce::AudioBuffer<float> block ((int) reader->numChannels, blockSize);
+        std::vector<float> pending;  // filtered source-rate samples not yet consumed
+        pending.reserve ((size_t) blockSize * 2);
+
+        juce::LagrangeInterpolator interpolator;
+        auto written = 0;
+
+        for (auto position = 0; position < numSamples && written < outLength;)
+        {
+            const auto count = juce::jmin (blockSize, numSamples - position);
+
+            if (! reader->read (&block, 0, count, position, true, true))
             {
-                error = "STEM IS TOO SHORT";
+                error = "COULD NOT READ STEM";
                 return false;
             }
 
-            out.assign ((size_t) outLength, 0.0f);
+            position += count;
 
-            juce::LagrangeInterpolator interpolator;
-            interpolator.process (ratio, mono.data(), out.data(), outLength);
-        }
-        else
-        {
-            mono.resize ((size_t) numSamples);
-            out = std::move (mono);
+            const auto channels = block.getNumChannels();
+            const auto gain = 1.0f / (float) juce::jmax (1, channels);
+            const auto base = pending.size();
+
+            pending.resize (base + (size_t) count, 0.0f);
+
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                const auto* src = block.getReadPointer (ch);
+
+                for (int i = 0; i < count; ++i)
+                    pending[base + (size_t) i] += src[i] * gain;
+            }
+
+            for (auto& filter : lowpass)
+                for (auto i = base; i < pending.size(); ++i)
+                    pending[i] = filter.processSample (pending[i]);
+
+            if (! resampling)
+            {
+                const auto take = juce::jmin ((int) pending.size(), outLength - written);
+                std::copy (pending.begin(), pending.begin() + take, out.begin() + written);
+                written += take;
+                pending.clear();
+                continue;
+            }
+
+            // Hand the interpolator as many output samples as the pending
+            // input can cover, then keep whatever it did not consume.
+            const auto produce = juce::jmin (outLength - written,
+                                             (int) std::floor ((double) pending.size() / ratio));
+
+            if (produce <= 0)
+                continue;
+
+            const auto used = interpolator.process (ratio, pending.data(),
+                                                    out.data() + written, produce);
+
+            written += produce;
+            pending.erase (pending.begin(),
+                           pending.begin() + juce::jmin ((int) pending.size(), used));
         }
 
-        return true;
+        out.resize ((size_t) written);
+
+        return written > 0;
     }
 
     // Basic Pitch's note amplitude is the mean note-posteriorgram energy over
@@ -203,9 +241,8 @@ MidiTranscriber::Status MidiTranscriber::transcribe (
     report (0.0f);
 
     std::vector<float> audio;
-    auto sourceSeconds = 0.0;
 
-    if (! readAsModelRate (stemWav, audio, sourceSeconds, error))
+    if (! readAsModelRate (stemWav, audio, error))
         return Status::failed;
 
     if (! alive())
@@ -286,8 +323,8 @@ MidiTranscriber::Status MidiTranscriber::transcribe (
         ++out.noteCount;
     }
 
-    noteTrack.updateMatchedPairs();
     noteTrack.sort();
+    noteTrack.updateMatchedPairs(); // after the sort, so the pairs match what is written
 
     juce::MidiFile file;
     file.setTicksPerQuarterNote (ticksPerQuarterNote);

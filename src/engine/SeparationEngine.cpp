@@ -520,16 +520,17 @@ public:
 
         if (status != MidiTranscriber::Status::ok)
         {
-            // The chip falls back to idle rather than growing an error state:
-            // a failed transcription costs nothing to retry, and the done view
-            // has no room to explain itself.
+            // The chip falls back to idle rather than growing an error state.
+            // Ready has no error surface — `message` is only ever read in the
+            // Error phase — and a failed transcription costs nothing to retry,
+            // so the honest thing is to look untried again.
+            jassertquiet (error.isNotEmpty());
+
             publish ([] (EngineSnapshot::StemInfo& s)
             {
                 s.midiState = EngineSnapshot::MidiState::none;
                 s.midiProgress = 0.0f;
             });
-
-            engine.mutate (generation, [error] (EngineSnapshot& s) { s.message = error; });
 
             return jobHasFinished;
         }

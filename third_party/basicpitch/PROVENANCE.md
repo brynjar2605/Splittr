@@ -14,7 +14,6 @@ headers — and neither upstream build can produce just that slice.
 | `BasicPitchCNN.{h,cpp}` | [DamRsn/NeuralNote](https://github.com/DamRsn/NeuralNote) `Lib/Model/` | `f979e51` | Apache-2.0 |
 | `BasicPitchConstants.h` | NeuralNote `Lib/Model/` | `f979e51` | Apache-2.0 |
 | `Notes.{h,cpp}` | NeuralNote `Lib/Model/` | `f979e51` | Apache-2.0 |
-| `Utils.h` | NeuralNote `Lib/Model/` | `f979e51` | Apache-2.0 |
 | `weights/cnn_*.json` | NeuralNote `Lib/ModelData/` | `f979e51` | Apache-2.0 |
 | `weights/features_model.onnx` | NeuralNote `Lib/ModelData/` | `f979e51` | Apache-2.0 |
 | `RTNeural/**` | [jatinchowdhury18/RTNeural](https://github.com/jatinchowdhury18/RTNeural), via NeuralNote's `ThirdParty/RTNeural/RTNeural/` | as pinned by NeuralNote `f979e51` | BSD-3-Clause (`RTNeural/LICENSE`) |
@@ -62,8 +61,11 @@ output, which is float32 summation-order noise.
 
 ### Local edits to vendored files
 
-`Notes.{h,cpp}`, `BasicPitchConstants.h`, `Utils.h`, `RTNeural/**` and
-`modules/json/json.hpp` are byte-identical to upstream. `BasicPitchCNN.{h,cpp}` has one
-change, marked `Splittr change:` in the source: the four model JSONs are passed
-to the constructor instead of being read out of JUCE's generated
+`Notes.{h,cpp}`, `BasicPitchConstants.h`, `RTNeural/**` and
+`modules/json/json.hpp` are byte-identical to upstream. `BasicPitchCNN.{h,cpp}`
+has one change, marked `Splittr change:` in the source: the four model JSONs are
+passed to the constructor instead of being read out of JUCE's generated
 `BinaryData.h`.
+
+Upstream's `Lib/Model/Utils.h` is not vendored — nothing that survived here
+calls its one function.

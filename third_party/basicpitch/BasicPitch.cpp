@@ -165,6 +165,10 @@ bool Transcriber::transcribe (const float* audio, int numSamples, const Params& 
 
     report (0.95f);
 
+    // The CQT has done its job; note creation allocates about as much again,
+    // so hand the memory back before it does rather than after.
+    impl->features.clear();
+
     // Notes::convert turns these straight into array indices without clamping,
     // so a band outside the model's own 27.5 Hz .. 4186 Hz range would walk off
     // the posteriorgram.
@@ -210,7 +214,6 @@ bool Transcriber::transcribe (const float* audio, int numSamples, const Params& 
     });
 
     impl->notes.clear();
-    impl->features.clear();
 
     report (1.0f);
 

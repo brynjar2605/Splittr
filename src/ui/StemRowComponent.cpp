@@ -21,8 +21,12 @@ namespace
     constexpr int midiChipGap = 8;
     constexpr float midiChipTextSize = 8.5f;
 
-    const juce::String midiIdleLabel ("MIDI");
-    const juce::String midiBusyLabel (juce::String::fromUTF8 ("MIDI\xe2\x80\xa6"));
+    // The busy label is the wider of the two, so it is what the chip is
+    // measured against.
+    juce::String midiLabel (bool working)
+    {
+        return working ? juce::String::fromUTF8 ("MIDI\xe2\x80\xa6") : juce::String ("MIDI");
+    }
 
     // A click is a mouse-up that never travelled this far; anything beyond is
     // a drag, and drags belong to the external file drag-out.
@@ -115,7 +119,7 @@ juce::Rectangle<int> StemRowComponent::midiChipBounds() const
         return {};
 
     const auto font = theme::mono (midiChipTextSize, 0.08f);
-    const auto width = (int) std::ceil (ui::textWidth (font, midiBusyLabel)) + 12;
+    const auto width = (int) std::ceil (ui::textWidth (font, midiLabel (true))) + 12;
     const auto mute = muteButtonBounds();
 
     return { mute.getX() - midiChipGap - width,
@@ -215,7 +219,7 @@ void StemRowComponent::paint (juce::Graphics& g)
                                    : theme::text40);
 
         g.setFont (theme::mono (midiChipTextSize, 0.08f));
-        g.drawText (working ? midiBusyLabel : midiIdleLabel, chip, juce::Justification::centred);
+        g.drawText (midiLabel (working), chip, juce::Justification::centred);
     }
 
     // --- transport cluster: mute dot + shared scrubber ---
