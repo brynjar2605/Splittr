@@ -7,6 +7,7 @@
 #include "AudioFileIO.h"
 #include "ModelManager.h"
 #include "StemCache.h" // StemIndex / stemOrderFor
+#include "StemFx.h"
 
 namespace splittr
 {
@@ -44,6 +45,11 @@ struct EngineSnapshot
         juce::File midi;
         MidiState midiState = MidiState::none;
         float midiProgress = 0.0f;
+
+        // Sound shaping for this stem (issue #9): flat until the user tunes it,
+        // and read back from the entry's meta.xml on reopen. What the audition
+        // hears and what the bounce writes both come from here.
+        StemFxParams fx;
     };
 
     // Display order for the mode that produced them: five stems for the
@@ -88,6 +94,21 @@ public:
     // `force` re-runs a stem whose .mid already exists (the modifier-click on a
     // finished chip); without it a finished stem is left alone.
     void requestMidi (int stemIndex, bool force = false);
+
+    // Per-stem sound shaping (issue #9). Only meaningful in Ready; always
+    // updates the snapshot, which is what the UI drags a slider through at
+    // frame rate. `commit` — the mouse-up — additionally writes the params into
+    // the entry's meta.xml, so they survive a reopen, and drops the shaped
+    // bounce when they land back on flat.
+    void setStemFx (int stemIndex, const StemFxParams&, bool commit);
+
+    // The file a stem should leave the plugin as — dragged out or exported.
+    // Flat params: the raw render, byte for byte. Otherwise the shaped bounce
+    // in <entry>/tuned/, rendered here and now when it is missing or stale, so
+    // the first drag after a tweak pays a beat and the rest are instant. Falls
+    // back to the raw stem if the bounce cannot be written, and returns an
+    // empty File when there is no such stem to hand over.
+    juce::File processedStemFile (int stemIndex);
 
     void requestCancel();
     void requestNewFile();                        // done -> idle

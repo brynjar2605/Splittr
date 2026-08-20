@@ -117,6 +117,154 @@ namespace
             info.midiState = EngineSnapshot::MidiState::ready;
         }
     }
+
+    // --- per-stem shaping (issue #9) ---------------------------------------
+    // Two attributes per stem, keyed on the canonical name like the waveforms
+    // and peaks already are: "fxVocals" is what the user dialled in,
+    // "fxBouncedVocals" is what the file in tuned/ was rendered from. Both are
+    // absent on a stem that was never tuned, and no meta version bump — an
+    // entry without them is one that predates the feature, exactly as with the
+    // export names (issue #11) and the transcriptions (issue #19).
+    juce::String fxAttribute (const juce::String& stemName) { return "fx" + stemName; }
+    juce::String fxBouncedAttribute (const juce::String& stemName) { return "fxBounced" + stemName; }
+
+    // The shaped twin of a raw stem: same filename, one directory down, so what
+    // lands in the DAW keeps the name the raw render would have had.
+    juce::File tunedFileFor (const juce::File& wav)
+    {
+        return wav.getParentDirectory().getChildFile ("tuned").getChildFile (wav.getFileName());
+    }
+
+    // Rewrite an entry's meta.xml with `values` set on it; an empty value
+    // removes its attribute. Parse-and-write rather than regenerate: the meta
+    // is written by the job that produced the entry, and tuning must not be
+    // able to lose anything else it recorded.
+    bool writeMetaAttributes (const juce::File& meta, const juce::StringPairArray& values)
+    {
+        auto xml = juce::parseXML (meta);
+
+        if (xml == nullptr)
+            return false;
+
+        for (const auto& key : values.getAllKeys())
+        {
+            if (values[key].isEmpty())
+                xml->removeAttribute (key);
+            else
+                xml->setAttribute (key, values[key]);
+        }
+
+        return xml->writeTo (meta);
+    }
+
+    // Render a stem through its chain, offline, at the file's own rate and in
+    // its own float32 WAV format. Streamed in blocks: a stem is a hundred-odd
+    // megabytes, and there is no reason for two copies of it to exist at once.
+    //
+    // Synchronous by design — see processedStemFile.
+    bool bounceStem (const juce::File& source, const juce::File& target, const StemFxParams& fx)
+    {
+        constexpr int blockSamples = 8192;
+
+        juce::AudioFormatManager formats;
+        formats.registerBasicFormats();
+
+        std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (source));
+
+        if (reader == nullptr || reader->numChannels == 0 || reader->sampleRate <= 0.0
+            || reader->lengthInSamples <= 0)
+            return false;
+
+        target.getParentDirectory().createDirectory();
+
+        // The bounce is written beside its destination and moved into place
+        // only once it is complete, so a drag can never pick up a half file.
+        auto part = target.getSiblingFile (target.getFileName() + ".part");
+        part.deleteFile();
+
+        std::unique_ptr<juce::OutputStream> stream = part.createOutputStream();
+
+        if (stream == nullptr)
+            return false;
+
+        auto options = juce::AudioFormatWriterOptions {}
+                           .withSampleRate (reader->sampleRate)
+                           .withNumChannels (2)
+                           .withBitsPerSample (32)
+                           .withSampleFormat (juce::AudioFormatWriterOptions::SampleFormat::floatingPoint);
+
+        // Carry the raw stem's LIST/INFO across: the tuned file is the same
+        // stem of the same song, and should say so in the DAW.
+        for (const auto* key : { juce::WavAudioFormat::riffInfoTitle,
+                                 juce::WavAudioFormat::riffInfoSoftware,
+                                 juce::WavAudioFormat::riffInfoKeywords })
+            if (reader->metadataValues.containsKey (key))
+                options = options.withMetadata (key, reader->metadataValues[key]);
+
+        juce::WavAudioFormat wavFormat;
+        auto writer = wavFormat.createWriterFor (stream, options);
+
+        if (writer == nullptr)
+        {
+            part.deleteFile();
+            return false;
+        }
+
+        // Params before prepare: prepare() snaps the output gain to whatever
+        // the chain is already set to, so the bounce does not open on a ramp
+        // the audition never had.
+        StemFxChain chain;
+        chain.setParams (fx);
+        chain.prepare (reader->sampleRate, blockSamples);
+
+        // Stems are always rendered stereo; a mono one is doubled rather than
+        // run through the chain twice with one buffer.
+        const auto stereoSource = reader->numChannels > 1;
+        juce::AudioBuffer<float> block (2, blockSamples);
+
+        auto ok = true;
+
+        for (juce::int64 pos = 0; pos < reader->lengthInSamples;)
+        {
+            const auto todo = (int) juce::jmin ((juce::int64) blockSamples,
+                                                reader->lengthInSamples - pos);
+
+            if (! reader->read (&block, 0, todo, pos, true, stereoSource))
+            {
+                ok = false;
+                break;
+            }
+
+            if (! stereoSource)
+                block.copyFrom (1, 0, block, 0, 0, todo);
+
+            chain.process (block.getWritePointer (0), block.getWritePointer (1), todo);
+
+            if (! writer->writeFromAudioSampleBuffer (block, 0, todo))
+            {
+                ok = false;
+                break;
+            }
+
+            pos += todo;
+        }
+
+        writer.reset(); // flush and close before the file is moved
+
+        if (! ok)
+        {
+            part.deleteFile();
+            return false;
+        }
+
+        target.deleteFile();
+
+        if (part.moveFileTo (target))
+            return true;
+
+        part.deleteFile();
+        return false;
+    }
 } // namespace
 
 //==============================================================================
@@ -400,6 +548,11 @@ public:
 
         auto entry = StemCache::entryIn (StemCache::dirFor (source, quality), stemNames, stemFiles);
         entry.dir.createDirectory();
+
+        // A re-render replaces the raw stems, so any shaped bounce beside them
+        // is stale by definition — and the meta about to be written carries no
+        // fx attributes to remember it by (issue #9).
+        entry.dir.getChildFile ("tuned").deleteRecursively();
 
         const auto numStems = (int) result.stems.size();
 
@@ -709,6 +862,8 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
             info.wav = entry.stems[(size_t) i];
             info.waveform = metaUncsv (xml->getStringAttribute ("wave" + stemNames[i]));
             info.peakDb = (float) xml->getDoubleAttribute ("peak" + stemNames[i], -120.0);
+            info.fx = StemFxParams::fromDescriptor (
+                xml->getStringAttribute (fxAttribute (stemNames[i])));
             attachExistingMidi (info);
             s.stems.push_back (std::move (info));
         }
@@ -794,6 +949,8 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
             info.wav = entry.stems[(size_t) i];
             info.waveform = metaUncsv (xml->getStringAttribute ("wave" + stemNames[i]));
             info.peakDb = (float) xml->getDoubleAttribute ("peak" + stemNames[i], -120.0);
+            info.fx = StemFxParams::fromDescriptor (
+                xml->getStringAttribute (fxAttribute (stemNames[i])));
             attachExistingMidi (info);
             s.stems.push_back (std::move (info));
         }
@@ -884,6 +1041,102 @@ void SeparationEngine::requestMidi (int stemIndex, bool force)
     // to the session rather than replacing it, so it queues behind whatever is
     // already running and leaves the stems alone.
     pool.addJob (new MidiJob (*this, gen, stemIndex, wav, kind, bpm), true);
+}
+
+void SeparationEngine::setStemFx (int stemIndex, const StemFxParams& fx, bool commit)
+{
+    juce::File wav;
+    juce::String name;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        if (snapshot.phase != Phase::Ready
+            || ! juce::isPositiveAndBelow (stemIndex, (int) snapshot.stems.size()))
+            return;
+
+        auto& stem = snapshot.stems[(size_t) stemIndex];
+
+        // The snapshot always follows the sliders — that is what the audition
+        // is fed from, and it has to keep up with the drag.
+        stem.fx = fx;
+
+        if (! commit)
+            return;
+
+        wav = stem.wav;
+        name = stem.name;
+    }
+
+    // Disk work stays outside the lock: a commit is a mouse-up, but the UI is
+    // still reading the snapshot at 30 Hz behind it.
+    const auto meta = wav.getParentDirectory().getChildFile ("meta.xml");
+    const auto descriptor = fx.toDescriptor();
+
+    juce::StringPairArray values;
+    values.set (fxAttribute (name), descriptor);
+
+    if (descriptor.isEmpty())
+    {
+        // Back to flat: the entry should carry nothing at all, so the bounce
+        // and the attribute that describes it both go.
+        tunedFileFor (wav).deleteFile();
+        values.set (fxBouncedAttribute (name), {});
+    }
+
+    writeMetaAttributes (meta, values);
+}
+
+juce::File SeparationEngine::processedStemFile (int stemIndex)
+{
+    juce::File wav;
+    juce::String name;
+    StemFxParams fx;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        if (snapshot.phase != Phase::Ready
+            || ! juce::isPositiveAndBelow (stemIndex, (int) snapshot.stems.size()))
+            return {};
+
+        const auto& stem = snapshot.stems[(size_t) stemIndex];
+        wav = stem.wav;
+        name = stem.name;
+        fx = stem.fx;
+    }
+
+    if (fx.isFlat() || ! wav.existsAsFile())
+        return wav; // an untuned stem leaves the plugin as the raw render
+
+    const auto meta = wav.getParentDirectory().getChildFile ("meta.xml");
+    const auto tuned = tunedFileFor (wav);
+    const auto descriptor = fx.toDescriptor();
+
+    // The bounce is only good for the params it was rendered from; anything
+    // else — including a tuned/ file left over from a run this meta forgot —
+    // is rendered again.
+    if (tuned.existsAsFile())
+    {
+        const auto xml = juce::parseXML (meta);
+
+        if (xml != nullptr && xml->getStringAttribute (fxBouncedAttribute (name)) == descriptor)
+            return tuned;
+    }
+
+    // Rendered here, on the message thread, rather than queued on the pool:
+    // the pool is where separations live, a drag cannot wait behind one, and a
+    // synchronous bounce has no race with the job that owns the entry. A
+    // 4-minute stereo stem is well under a second, so the first drag after a
+    // tweak pays a beat and every later one is instant.
+    if (! bounceStem (wav, tuned, fx))
+        return wav; // nothing shaped to hand over: better the raw stem than none
+
+    juce::StringPairArray values;
+    values.set (fxBouncedAttribute (name), descriptor);
+    writeMetaAttributes (meta, values);
+
+    return tuned;
 }
 
 void SeparationEngine::requestCancel()

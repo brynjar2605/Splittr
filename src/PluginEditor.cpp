@@ -17,6 +17,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     content.addChildComponent (workingView);
     content.addChildComponent (doneView);
     content.addChildComponent (confirmView);
+    content.addChildComponent (tuneView);     // over the done view it shapes
     content.addChildComponent (libraryView);
     content.addChildComponent (settingsView); // added last: sits on top
 
@@ -30,6 +31,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         workingView.setBounds (bounds);
         doneView.setBounds (bounds);
         confirmView.setBounds (bounds);
+        tuneView.setBounds (bounds);
         libraryView.setBounds (bounds);
         settingsView.setBounds (bounds);
     }
@@ -138,6 +140,48 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     doneView.onMuteToggle = [&audition] (int stem) { audition.setMuted (stem, ! audition.isMuted (stem)); };
 
     doneView.onMidi = [&engine] (int stem, bool force) { engine.requestMidi (stem, force); };
+
+    // --- per-stem shaping (issue #9) ---
+    doneView.onTune = [this, &engine] (int stem)
+    {
+        const auto snap = engine.getSnapshot();
+
+        if (juce::isPositiveAndBelow (stem, (int) snap.stems.size()))
+        {
+            tuneView.show (stem, snap.stems[(size_t) stem].name, snap.stems[(size_t) stem].fx);
+            showTune = true;
+        }
+    };
+
+    // Live tweaks go to both sinks: the engine's snapshot (marker, meta on
+    // commit, bounce staleness) and the audition chain the user is hearing.
+    tuneView.onChange = [&engine, &audition] (int stem, const splittr::StemFxParams& fx, bool commit)
+    {
+        engine.setStemFx (stem, fx, commit);
+        audition.setStemFx (stem, fx);
+    };
+
+    tuneView.onClose = [this] { showTune = false; };
+
+    // What actually leaves the plugin: the bounced tuned file when a stem is
+    // shaped, the raw render when it is flat.
+    doneView.resolveStemFile = [&engine] (int stem) { return engine.processedStemFile (stem); };
+
+    doneView.resolveAllFiles = [&engine]
+    {
+        juce::StringArray files;
+        const auto count = (int) engine.getSnapshot().stems.size();
+
+        for (int i = 0; i < count; ++i)
+        {
+            const auto f = engine.processedStemFile (i);
+
+            if (f.existsAsFile())
+                files.add (f.getFullPathName());
+        }
+
+        return files;
+    };
 
     // Seeking is how you audition a spot, so a click on a cold transport
     // starts the shared playback rather than silently moving the playhead.
@@ -312,13 +356,20 @@ void SplittrAudioProcessorEditor::exportStems()
                               // existed still gains it on the way out.
                               const auto base = snap.sourceFile.getFileNameWithoutExtension();
 
-                              for (const auto& stem : snap.stems)
+                              for (size_t i = 0; i < snap.stems.size(); ++i)
                               {
+                                  const auto& stem = snap.stems[i];
                                   const auto name = splittr::stemFileName (base, stem.name,
                                                                            snap.bpm, snap.key);
 
-                                  if (stem.wav.existsAsFile())
-                                      stem.wav.copyFileTo (dir.getChildFile (name));
+                                  // Shaped stems export their bounce, flat ones
+                                  // the raw render (issue #9) — same rule as
+                                  // the drag-outs.
+                                  const auto wav = splittrProcessor.getEngine()
+                                                       .processedStemFile ((int) i);
+
+                                  if (wav.existsAsFile())
+                                      wav.copyFileTo (dir.getChildFile (name));
 
                                   // A transcribed stem exports as a pair: the
                                   // .mid lands beside its audio under the same
@@ -521,11 +572,16 @@ void SplittrAudioProcessorEditor::timerCallback()
     const bool showDone = snap.phase == Phase::Ready;
     const bool showIdle = ! showDownload && ! showWorking && ! showDone;
 
+    // The tune overlay belongs to the done state: leaving it closes the panel.
+    if (! showDone)
+        showTune = false;
+
     idleView.setVisible (showIdle);
     downloadView.setVisible (showDownload);
     workingView.setVisible (showWorking);
     doneView.setVisible (showDone);
     confirmView.setVisible (confirming);
+    tuneView.setVisible (showTune);
     libraryView.setVisible (showLibrary);
     settingsView.setVisible (showSettings);
 
@@ -570,6 +626,12 @@ void SplittrAudioProcessorEditor::timerCallback()
                                      muted, playing, pos, len, animationClock);
 
             doneView.row (i).setMidi (midiChipFor (stem), stem.midi, stem.midiProgress);
+            doneView.row (i).setFx (! stem.fx.isFlat());
+
+            // Keeps the audition chain in step with the snapshot — a reopened
+            // entry comes back audibly shaped, and a song change cannot carry
+            // the previous song's params over. No-op when nothing changed.
+            audition.setStemFx (i, stem.fx);
         }
     }
 }

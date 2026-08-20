@@ -133,6 +133,10 @@ void AuditionPlayer::prepareToPlay (double sampleRate, int samplesPerBlock)
     {
         gain[(size_t) i].reset (hostRate, muteRampSeconds);
         gain[(size_t) i].setCurrentAndTargetValue (muted[(size_t) i].load() ? 0.0f : 1.0f);
+
+        // The host rate, not the file's: the transport hands us resampled
+        // audio, so that is the rate the chains actually see (issue #9).
+        chains[(size_t) i].prepare (hostRate, hostBlockSize);
     }
 
     transport.prepareToPlay (hostBlockSize, hostRate);
@@ -158,12 +162,40 @@ void AuditionPlayer::processAddTo (juce::AudioBuffer<float>& buffer)
     for (int s = 0; s < numStems; ++s)
         gain[(size_t) s].setTargetValue (muted[(size_t) s].load (std::memory_order_relaxed) ? 0.0f : 1.0f);
 
+    if (fxNeedsReset.exchange (false, std::memory_order_acquire))
+        for (auto& chain : chains)
+            chain.reset();
+
+    // Pick up whatever the UI published since the last block. tryEnter: waiting
+    // on the message thread here is never worth it, and a missed grab only
+    // delays the tweak by one block.
+    if (fxChanges.load (std::memory_order_acquire) != fxSeen)
+    {
+        const juce::ScopedTryLock stl (fxLock);
+
+        if (stl.isLocked())
+        {
+            fxSeen = fxChanges.load (std::memory_order_relaxed);
+
+            for (int s = 0; s < maxStems; ++s)
+                chains[(size_t) s].setParams (pendingFx[(size_t) s]);
+        }
+    }
+
     for (int offset = 0; offset < numSamples;)
     {
         const auto chunk = juce::jmin (numSamples - offset, tempSamples);
 
         const juce::AudioSourceChannelInfo info (&temp, 0, chunk);
         transport.getNextAudioBlock (info);
+
+        // Shaping first, then the mute ramp: the ramp is the mixer's business
+        // and must stay the last thing that touches a stem. A flat chain costs
+        // one branch.
+        for (int s = 0; s < numStems; ++s)
+            chains[(size_t) s].process (temp.getWritePointer (s * 2),
+                                        temp.getWritePointer (s * 2 + 1),
+                                        chunk);
 
         // Gains are applied in short sub-chunks so the mute ramp lasts the same
         // ~10ms whatever block size the host hands us.
@@ -220,6 +252,8 @@ bool AuditionPlayer::load (const StemFiles& files)
     for (int i = 0; i < maxStems; ++i)
         gain[(size_t) i].setCurrentAndTargetValue (muted[(size_t) i].load() ? 0.0f : 1.0f);
 
+    fxNeedsReset.store (true, std::memory_order_release); // no state from the last set
+
     openFiles = files;
     activeStems.store (stemCount);
     loaded.store (true);
@@ -252,8 +286,14 @@ void AuditionPlayer::stop()
 
 void AuditionPlayer::seekFraction (double fraction01)
 {
-    if (loaded.load())
-        transport.setPosition (juce::jlimit (0.0, 1.0, fraction01) * transport.getLengthInSeconds());
+    if (! loaded.load())
+        return;
+
+    transport.setPosition (juce::jlimit (0.0, 1.0, fraction01) * transport.getLengthInSeconds());
+
+    // Filter tails and a compressor envelope from before the jump have nothing
+    // to do with the audio after it.
+    fxNeedsReset.store (true, std::memory_order_release);
 }
 
 void AuditionPlayer::stopIfFinished()
@@ -271,6 +311,25 @@ void AuditionPlayer::setMuted (int stem, bool shouldBeMuted)
 bool AuditionPlayer::isMuted (int stem) const
 {
     return juce::isPositiveAndBelow (stem, (int) maxStems) && muted[(size_t) stem].load();
+}
+
+void AuditionPlayer::setStemFx (int stem, const StemFxParams& fx)
+{
+    if (! juce::isPositiveAndBelow (stem, (int) maxStems))
+        return;
+
+    {
+        const juce::ScopedLock sl (fxLock);
+
+        if (pendingFx[(size_t) stem] == fx)
+            return; // a drag repeats the same value constantly
+
+        pendingFx[(size_t) stem] = fx;
+    }
+
+    // Bumped after the write and read before the copy, so the audio thread
+    // cannot see the counter move without seeing the params behind it.
+    fxChanges.fetch_add (1, std::memory_order_release);
 }
 
 bool AuditionPlayer::isPlaying() const

@@ -18,8 +18,9 @@ namespace
     constexpr int wideRowGap = 6, tightRowGap = 3;
     constexpr int tightAbove = 5; // row counts above this use the tight gutter
 
-    // DRAG ALL's dot grid: the rows' grip at 3 rows instead of 5, which is all
-    // a 13px footer has room for. Same 4px pitch, same 1.5px dots.
+    // DRAG ALL's dot grid — the old row grip, kept here because this one is
+    // only ever dragged: the rows traded theirs for the mix icon, which is
+    // also a click target (issue #9).
     constexpr int dragGripWidth = 10, dragGripGap = 6;
 
     // A press that never travelled this far is a click on a footer action;
@@ -50,6 +51,12 @@ void DoneView::rebuildRows (const std::vector<EngineSnapshot::StemInfo>& stems)
         r->onMuteToggle = [this, i] { if (onMuteToggle != nullptr) onMuteToggle (i); };
         r->onSeek = [this, i] (double f) { if (onSeek != nullptr) onSeek (i, f); };
         r->onMidiClick = [this, i] (bool force) { if (onMidi != nullptr) onMidi (i, force); };
+        r->onTune = [this, i] { if (onTune != nullptr) onTune (i); };
+
+        r->resolveDragFile = [this, i]
+        {
+            return resolveStemFile != nullptr ? resolveStemFile (i) : juce::File();
+        };
 
         addAndMakeVisible (r);
     }
@@ -212,9 +219,17 @@ void DoneView::mouseDrag (const juce::MouseEvent& e)
         || ! dragAllBounds.contains (e.getMouseDownPosition()))
         return;
 
+    // Asked at the moment the drag starts, not when the snapshot arrived: the
+    // editor resolves the processed version of every shaped stem here (issue
+    // #9), which may mean bouncing them. The raw renders are the fallback.
+    auto payload = resolveAllFiles != nullptr ? resolveAllFiles() : juce::StringArray();
+
+    if (payload.isEmpty())
+        payload = stemPaths;
+
     juce::StringArray files;
 
-    for (const auto& path : stemPaths)
+    for (const auto& path : payload)
         if (juce::File (path).existsAsFile())
             files.add (path);
 

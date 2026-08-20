@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "StemCache.h" // maxStems
+#include "StemFx.h"
 
 namespace splittr
 {
@@ -52,6 +53,11 @@ public:
     void setMuted (int stem, bool);
     bool isMuted (int stem) const;
 
+    // Per-stem sound shaping, heard while it is being dialled in (issue #9).
+    // Cheap to call at slider rate: unchanged params are dropped here, and the
+    // audio thread picks the rest up at the top of its next block.
+    void setStemFx (int stem, const StemFxParams&);
+
     bool isLoaded() const { return loaded.load(); }
     bool isPlaying() const;
 
@@ -74,6 +80,24 @@ private:
 
     std::array<std::atomic<bool>, maxStems> muted {};
     std::array<juce::SmoothedValue<float>, maxStems> gain;
+
+    // Shaping runs on the audio thread, not in the mixer source: the transport
+    // reads ~1.5 s ahead, so a chain in there would only be heard that far into
+    // the future — a tweak has to land on the next block or it is not audition
+    // (issue #9).
+    //
+    // The message thread writes `pendingFx` under `fxLock` and bumps
+    // `fxChanges`; the audio thread only tryEnters, so a slider drag can never
+    // stall it — a failed grab just means the change lands one block later.
+    std::array<StemFxChain, maxStems> chains;
+    std::array<StemFxParams, maxStems> pendingFx;
+    juce::CriticalSection fxLock;
+    std::atomic<int> fxChanges { 0 };
+    int fxSeen = 0; // audio thread's copy of the counter
+
+    // Filter and envelope state that a jump (or a fresh load) has invalidated,
+    // cleared where it is safe to touch: on the audio thread.
+    std::atomic<bool> fxNeedsReset { false };
 
     // How many stems the loaded set actually has; read on the audio thread.
     std::atomic<int> activeStems { 0 };

@@ -66,8 +66,10 @@ target_sources(Splittr PRIVATE
     src/engine/SeparationEngine.cpp
     src/engine/ModelManager.cpp
     src/engine/StemCache.cpp
+    src/engine/StemFx.cpp
     src/engine/AuditionPlayer.cpp
-    src/engine/TrackAnalyzer.cpp)
+    src/engine/TrackAnalyzer.cpp
+    src/ui/TuneView.cpp)
 
 target_include_directories(Splittr PRIVATE src)
 

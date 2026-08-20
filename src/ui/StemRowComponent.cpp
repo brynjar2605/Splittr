@@ -27,6 +27,13 @@ namespace
         return working ? juce::String::fromUTF8 ("MIDI\xe2\x80\xa6") : juce::String ("MIDI");
     }
 
+    // The mix icon in the grip column (issue #9): three fader tracks with
+    // their caps at different points along them, which is what makes three
+    // lines read as a mixer rather than a hamburger.
+    constexpr float mixIconWidth = 12.0f, mixIconPitch = 5.0f;
+    constexpr float mixIconHeight = 2.0f * mixIconPitch + 1.0f;
+    constexpr float mixIconCap[3] = { 2.0f, 7.0f, 4.0f };
+
     // A click is a mouse-up that never travelled this far; anything beyond is
     // a drag, and drags belong to the external file drag-out.
     constexpr int clickSlop = 5;
@@ -87,6 +94,15 @@ void StemRowComponent::setMidi (MidiChip state, const juce::File& file, float pr
     repaint();
 }
 
+void StemRowComponent::setFx (bool nonFlat)
+{
+    if (fxNonFlat == nonFlat)
+        return;
+
+    fxNonFlat = nonFlat;
+    repaint();
+}
+
 // Seven rows only fit by giving up vertical padding; the title strip stays put
 // and the waveform absorbs the rest of the loss.
 int StemRowComponent::verticalPad() const
@@ -97,6 +113,11 @@ int StemRowComponent::verticalPad() const
 int StemRowComponent::titleGap() const
 {
     return getHeight() < compactBelow ? 2 : 4;
+}
+
+juce::Rectangle<int> StemRowComponent::gripBounds() const
+{
+    return getLocalBounds().withWidth (gripWidth);
 }
 
 juce::Rectangle<int> StemRowComponent::muteButtonBounds() const
@@ -150,14 +171,26 @@ void StemRowComponent::paint (juce::Graphics& g)
     g.setColour (theme::lineSoft15);
     g.fillRect (grip.getRight() - 1, grip.getY() + 1, 1, grip.getHeight() - 2);
 
+    // The mix icon: click to shape this stem, drag to hand the DAW the result
+    // (issue #9). It stays at full strength on a muted row — what the drag
+    // carries has nothing to do with what the audition is playing.
     {
-        g.setColour (theme::text40);
-        const auto cx = (float) grip.getCentreX() - 4.5f;
-        const auto cy = (float) grip.getCentreY() - 8.5f;
+        const auto stroke = fxNonFlat ? (gripHovered ? theme::accentSoft : theme::accentMid)
+                                      : (gripHovered ? theme::text : theme::text40);
 
-        for (int row = 0; row < 5; ++row)
-            for (int col = 0; col < 3; ++col)
-                g.fillEllipse (cx + (float) col * 4.0f, cy + (float) row * 4.0f, 1.5f, 1.5f);
+        const auto left = (float) grip.getCentreX() - mixIconWidth * 0.5f;
+        const auto top = (float) grip.getCentreY() - mixIconHeight * 0.5f;
+
+        for (int fader = 0; fader < 3; ++fader)
+        {
+            const auto y = top + (float) fader * mixIconPitch;
+
+            g.setColour (stroke.withMultipliedAlpha (0.55f));
+            g.fillRect (left, y, mixIconWidth, 1.0f);
+
+            g.setColour (stroke);
+            g.fillRect (left + mixIconCap[fader], y - 2.0f, 3.0f, 5.0f);
+        }
     }
 
     auto body = bounds.reduced (padX, verticalPad());
@@ -296,6 +329,7 @@ void StemRowComponent::mouseDown (const juce::MouseEvent& e)
 {
     draggingOut = false;
     pressedMidi = midiChipBounds().contains (e.getPosition());
+    pressedGrip = gripBounds().contains (e.getPosition());
 }
 
 void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
@@ -316,8 +350,27 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
         return;
     }
 
-    if (! muteButtonBounds().contains (e.getMouseDownPosition()) && wavFile.existsAsFile())
-        startFileDrag (wavFile);
+    if (! muteButtonBounds().contains (e.getMouseDownPosition()))
+        startStemDrag();
+}
+
+void StemRowComponent::startStemDrag()
+{
+    auto file = wavFile;
+
+    // Resolving may take a beat — the editor can bounce the shaped stem to
+    // disk synchronously here (issue #9) — which is fine: nothing is in flight
+    // until performExternalDragDropOfFiles is called below.
+    if (resolveDragFile != nullptr)
+    {
+        const auto resolved = resolveDragFile();
+
+        if (resolved.existsAsFile())
+            file = resolved;
+    }
+
+    if (file.existsAsFile())
+        startFileDrag (file);
 }
 
 void StemRowComponent::startFileDrag (const juce::File& file)
@@ -347,6 +400,20 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
             onMidiClick (e.mods.isCommandDown() || e.mods.isAltDown());
 
         pressedMidi = false;
+        pressedGrip = false;
+        draggingOut = false;
+        return;
+    }
+
+    if (pressedGrip)
+    {
+        // A click on the mix icon opens the shaping panel; a press with travel
+        // was the drag-out and has already happened.
+        if (! draggingOut && e.getDistanceFromDragStart() < clickSlop
+            && gripBounds().contains (e.getPosition()) && onTune != nullptr)
+            onTune();
+
+        pressedGrip = false;
         draggingOut = false;
         return;
     }
@@ -377,16 +444,20 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
 void StemRowComponent::mouseMove (const juce::MouseEvent& e)
 {
     const auto overChip = midiChipBounds().contains (e.getPosition());
+    const auto overGrip = gripBounds().contains (e.getPosition());
 
-    if (overChip == midiHovered)
+    // The mix icon is clicked, a finished chip is dragged, an unstarted one is
+    // clicked, and the rest of the row is the file drag-out; the cursor says
+    // which before the press does.
+    setMouseCursor (overGrip || (overChip && midi == MidiChip::idle)
+                        ? juce::MouseCursor::PointingHandCursor
+                        : juce::MouseCursor::DraggingHandCursor);
+
+    if (overChip == midiHovered && overGrip == gripHovered)
         return;
 
     midiHovered = overChip;
-
-    // A finished chip is dragged, an unstarted one is clicked; the cursor says
-    // which before the press does.
-    setMouseCursor (overChip && midi == MidiChip::idle ? juce::MouseCursor::PointingHandCursor
-                                                       : juce::MouseCursor::DraggingHandCursor);
+    gripHovered = overGrip;
     repaint();
 }
 
@@ -396,6 +467,7 @@ void StemRowComponent::mouseExit (const juce::MouseEvent&)
 {
     hovered = false;
     midiHovered = false;
+    gripHovered = false;
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     repaint();
 }
