@@ -7,8 +7,9 @@ namespace splittr
 
 struct TrackAnalysis
 {
-    double bpm = 0.0;  // 0 = undetected
-    juce::String key;  // e.g. "F# MIN", "Bb MAJ"; empty = undetected
+    double bpm = 0.0;            // 0 = undetected
+    double bpmConfidence = 0.0;  // 0..1; below the internal threshold bpm is 0
+    juce::String key;            // e.g. "F# MIN", "Bb MAJ"; empty = undetected
 };
 
 // Lightweight key + tempo estimation, run once per scan on the decoded mix.
