@@ -15,7 +15,8 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     content.addChildComponent (downloadView);
     content.addChildComponent (workingView);
     content.addChildComponent (doneView);
-    content.addChildComponent (confirmView); // added last: sits on top
+    content.addChildComponent (confirmView);
+    content.addChildComponent (settingsView); // added last: sits on top
 
     // Fixed design-space layout; the window scales this surface uniformly.
     content.setBounds (0, 0, theme::editorWidth, theme::editorHeight);
@@ -27,6 +28,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         workingView.setBounds (bounds);
         doneView.setBounds (bounds);
         confirmView.setBounds (bounds);
+        settingsView.setBounds (bounds);
     }
 
     auto& engine = splittrProcessor.getEngine();
@@ -35,13 +37,18 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     idleView.onBrowse = [this] { browseForAudioFile(); };
     idleView.onQualityChange = [&engine] (splittr::Quality q) { engine.setQuality (q); };
 
-    idleView.onModeChange = [this] (splittr::theme::Mode m)
+    // Settings is reachable from every state — the header is always up.
+    headerBar.onSettings = [this] { showSettings = ! showSettings; };
+
+    settingsView.onClose = [this] { showSettings = false; };
+
+    settingsView.onModeChange = [this] (splittr::theme::Mode m)
     {
         splittr::theme::apply (m, splittr::theme::currentAccentHue());
         repaint();
     };
 
-    idleView.onAccentHueChange = [this] (float hue, bool commit)
+    settingsView.onAccentHueChange = [this] (float hue, bool commit)
     {
         splittr::theme::apply (splittr::theme::currentMode(), hue, commit);
         repaint();
@@ -405,6 +412,7 @@ void SplittrAudioProcessorEditor::timerCallback()
     workingView.setVisible (showWorking);
     doneView.setVisible (showDone);
     confirmView.setVisible (confirming);
+    settingsView.setVisible (showSettings);
 
     if (showIdle)
     {
