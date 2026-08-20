@@ -1,5 +1,6 @@
 #include "SeparationEngine.h"
 #include "DemucsSeparator.h"
+#include "MidiTranscriber.h"
 #include "StemCache.h"
 #include "TrackAnalyzer.h"
 
@@ -98,6 +99,23 @@ namespace
         entry = StemCache::entryIn (entry.dir, stemNames, stemFilesFrom (*xml));
 
         return entry.complete() ? std::move (xml) : nullptr;
+    }
+
+    // A transcription lives beside its stem, so an entry that was transcribed
+    // in an earlier session comes back with its chips already lit — no meta
+    // version bump needed, and none that could go stale (issue #19).
+    void attachExistingMidi (EngineSnapshot::StemInfo& info)
+    {
+        if (! MidiTranscriber::supports (info.kind))
+            return;
+
+        const auto midi = MidiTranscriber::midiFileFor (info.wav);
+
+        if (midi.existsAsFile())
+        {
+            info.midi = midi;
+            info.midiState = EngineSnapshot::MidiState::ready;
+        }
     }
 } // namespace
 
@@ -442,6 +460,7 @@ public:
                 info.wav = entry.stems[(size_t) i];
                 info.waveform = waves[(size_t) i];
                 info.peakDb = result.peaksDb[(size_t) i];
+                attachExistingMidi (info);
                 s.stems.push_back (std::move (info));
             }
 
@@ -464,6 +483,87 @@ private:
     const juce::File source;
     const int generation;
     const Quality quality;
+};
+
+// One stem to MIDI. Short next to a separation — seconds, not minutes — but it
+// takes the same queue, so it can never run beside one.
+class SeparationEngine::MidiJob : public juce::ThreadPoolJob
+{
+public:
+    MidiJob (SeparationEngine& e, int gen, int index, juce::File file, int stemKind, double tempo)
+        : ThreadPoolJob ("midi"), engine (e), generation (gen), stemIndex (index),
+          wav (std::move (file)), kind (stemKind), bpm (tempo) {}
+
+    JobStatus runJob() override
+    {
+        const auto midi = MidiTranscriber::midiFileFor (wav);
+
+        MidiTranscription info;
+        juce::String error;
+
+        const auto status = MidiTranscriber::transcribe (
+            wav, midi, bpm, kind,
+            [this] (float p) { publish ([p] (EngineSnapshot::StemInfo& s) { s.midiProgress = p; }); },
+            [this] { return ! shouldExit(); },
+            info, error);
+
+        if (status == MidiTranscriber::Status::cancelled || shouldExit())
+        {
+            publish ([] (EngineSnapshot::StemInfo& s)
+            {
+                s.midiState = EngineSnapshot::MidiState::none;
+                s.midiProgress = 0.0f;
+            });
+
+            return jobHasFinished;
+        }
+
+        if (status != MidiTranscriber::Status::ok)
+        {
+            // The chip falls back to idle rather than growing an error state.
+            // Ready has no error surface — `message` is only ever read in the
+            // Error phase — and a failed transcription costs nothing to retry,
+            // so the honest thing is to look untried again.
+            jassertquiet (error.isNotEmpty());
+
+            publish ([] (EngineSnapshot::StemInfo& s)
+            {
+                s.midiState = EngineSnapshot::MidiState::none;
+                s.midiProgress = 0.0f;
+            });
+
+            return jobHasFinished;
+        }
+
+        publish ([midi] (EngineSnapshot::StemInfo& s)
+        {
+            s.midi = midi;
+            s.midiState = EngineSnapshot::MidiState::ready;
+            s.midiProgress = 1.0f;
+        });
+
+        return jobHasFinished;
+    }
+
+private:
+    // Every write goes through the generation guard and re-checks the index:
+    // the stem set can be replaced under us by a new run or a library open.
+    void publish (const std::function<void (EngineSnapshot::StemInfo&)>& fn)
+    {
+        engine.mutate (generation, [this, &fn] (EngineSnapshot& s)
+        {
+            if (juce::isPositiveAndBelow (stemIndex, (int) s.stems.size())
+                && s.stems[(size_t) stemIndex].wav == wav)
+                fn (s.stems[(size_t) stemIndex]);
+        });
+    }
+
+    SeparationEngine& engine;
+    const int generation;
+    const int stemIndex;
+    const juce::File wav;
+    const int kind;
+    const double bpm;
 };
 
 //==============================================================================
@@ -609,6 +709,7 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
             info.wav = entry.stems[(size_t) i];
             info.waveform = metaUncsv (xml->getStringAttribute ("wave" + stemNames[i]));
             info.peakDb = (float) xml->getDoubleAttribute ("peak" + stemNames[i], -120.0);
+            attachExistingMidi (info);
             s.stems.push_back (std::move (info));
         }
 
@@ -693,6 +794,7 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
             info.wav = entry.stems[(size_t) i];
             info.waveform = metaUncsv (xml->getStringAttribute ("wave" + stemNames[i]));
             info.peakDb = (float) xml->getDoubleAttribute ("peak" + stemNames[i], -120.0);
+            attachExistingMidi (info);
             s.stems.push_back (std::move (info));
         }
 
@@ -742,6 +844,46 @@ void SeparationEngine::requestSeparation (const juce::File& file)
     }
 
     pool.addJob (new SeparationJob (*this, file, gen, quality), true);
+}
+
+void SeparationEngine::requestMidi (int stemIndex, bool force)
+{
+    juce::File wav;
+    auto kind = -1;
+    auto bpm = 0.0;
+    auto gen = 0;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        if (snapshot.phase != Phase::Ready
+            || ! juce::isPositiveAndBelow (stemIndex, (int) snapshot.stems.size()))
+            return;
+
+        auto& stem = snapshot.stems[(size_t) stemIndex];
+
+        // Never interrupt one in flight, and only redo a finished one when the
+        // caller meant it.
+        if (stem.midiState == EngineSnapshot::MidiState::running
+            || (stem.midiState == EngineSnapshot::MidiState::ready && ! force))
+            return;
+
+        if (! MidiTranscriber::supports (stem.kind) || ! stem.wav.existsAsFile())
+            return;
+
+        stem.midiState = EngineSnapshot::MidiState::running;
+        stem.midiProgress = 0.0f;
+
+        wav = stem.wav;
+        kind = stem.kind;
+        bpm = snapshot.bpm;
+        gen = generation.load();
+    }
+
+    // Deliberately no generation bump and no removeAllJobs: transcription adds
+    // to the session rather than replacing it, so it queues behind whatever is
+    // already running and leaves the stems alone.
+    pool.addJob (new MidiJob (*this, gen, stemIndex, wav, kind, bpm), true);
 }
 
 void SeparationEngine::requestCancel()

@@ -2,20 +2,210 @@
 //
 //   splittr_cli <audio-in> <model.bin> <out-dir>
 //   splittr_cli --analyze <audio-in> [<audio-in> ...]
+//   splittr_cli --midi <stem.wav> <out.mid> [bpm]
 //
 // Separation mode writes every stem the model produces (32-bit float, 44.1 kHz)
 // to out-dir: five files for a 4-source model, seven for htdemucs_6s (guitar
 // and piano join). Analyse mode prints tempo/key/confidence per file — the
-// validation harness for TrackAnalyzer.
+// validation harness for TrackAnalyzer. MIDI mode transcribes one stem and
+// then reads the written file back with juce::MidiFile, so what it reports is
+// what a DAW would see rather than what the transcriber thinks it wrote.
 
 #include "engine/AudioFileIO.h"
 #include "engine/DemucsSeparator.h"
+#include "engine/MidiTranscriber.h"
 #include "engine/TrackAnalyzer.h"
 
 #include <iostream>
 
 namespace
 {
+    // The stem kind decides the frequency band Basic Pitch is allowed to use,
+    // and in the plugin it comes from the snapshot. Here it comes from the
+    // filename, which is how the cache names its stems.
+    int stemKindFromName (const juce::File& file)
+    {
+        const auto name = file.getFileNameWithoutExtension();
+
+        for (int kind = 0; kind < splittr::numStemKinds; ++kind)
+            if (name.containsIgnoreCase (splittr::stemName (kind)))
+                return kind;
+
+        return splittr::stemOther;
+    }
+
+    // Scientific pitch naming, i.e. middle C is C4 and A440 is A4 — what a
+    // DAW's piano roll shows.
+    juce::String noteName (int midiNote)
+    {
+        return juce::MidiMessage::getMidiNoteName (midiNote, true, true, 4);
+    }
+
+    // Parse the .mid back and print what is actually in it: the tempo track,
+    // the note count, the pitch span and where the notes sit in time.
+    int summariseMidiFile (const juce::File& midi, double expectedBpm)
+    {
+        juce::FileInputStream stream (midi);
+
+        juce::MidiFile file;
+
+        if (! stream.openedOk() || ! file.readFrom (stream))
+        {
+            std::cerr << "Could not parse " << midi.getFullPathName() << "\n";
+            return 1;
+        }
+
+        const auto ticksPerQuarter = (double) file.getTimeFormat();
+
+        if (ticksPerQuarter <= 0.0)
+        {
+            std::cerr << "SMPTE time format not expected here\n";
+            return 1;
+        }
+
+        auto tempoBpm = 0.0;
+        auto noteCount = 0;
+        auto lowest = 127, highest = 0;
+        auto firstTick = 0.0, lastTick = 0.0;
+        auto velocitySum = 0.0;
+        auto durationSum = 0.0;
+
+        // Per-pitch tally, so the summary shows the shape of the transcription
+        // and not just its size — a bass line that has quietly sprouted an
+        // octave of ghosts is obvious here and invisible in a note count.
+        int perPitchCount[128] = {};
+        double perPitchTicks[128] = {};
+
+        for (int t = 0; t < file.getNumTracks(); ++t)
+        {
+            const auto& track = *file.getTrack (t);
+
+            for (int i = 0; i < track.getNumEvents(); ++i)
+            {
+                const auto& message = track.getEventPointer (i)->message;
+
+                if (message.isTempoMetaEvent())
+                    tempoBpm = 60.0 / message.getTempoSecondsPerQuarterNote();
+
+                if (! message.isNoteOn())
+                    continue;
+
+                const auto* off = track.getEventPointer (i)->noteOffObject;
+                const auto start = message.getTimeStamp();
+                const auto end = off != nullptr ? off->message.getTimeStamp() : start;
+
+                if (noteCount == 0)
+                    firstTick = start;
+
+                const auto pitch = juce::jlimit (0, 127, message.getNoteNumber());
+
+                lowest = juce::jmin (lowest, pitch);
+                highest = juce::jmax (highest, pitch);
+                lastTick = juce::jmax (lastTick, end);
+                velocitySum += message.getVelocity();
+                durationSum += end - start;
+                ++perPitchCount[pitch];
+                perPitchTicks[pitch] += end - start;
+                ++noteCount;
+            }
+        }
+
+        const auto beatsToSeconds = tempoBpm > 0.0 ? 60.0 / tempoBpm / ticksPerQuarter : 0.0;
+
+        std::cout << "\n"
+                  << "  file            " << midi.getFileName() << " ("
+                  << midi.getSize() << " bytes)\n"
+                  << "  tracks          " << file.getNumTracks()
+                  << "   ticks/quarter " << (int) ticksPerQuarter << "\n"
+                  << "  tempo event     "
+                  << (tempoBpm > 0.0 ? juce::String (tempoBpm, 2) + " BPM"
+                                     : juce::String ("MISSING"))
+                  << (expectedBpm > 0.0 ? "   (expected " + juce::String (expectedBpm, 2) + ")"
+                                        : juce::String())
+                  << "\n"
+                  << "  notes           " << noteCount << "\n";
+
+        if (noteCount > 0)
+        {
+            std::cout << "  pitch range     " << noteName (lowest) << " .. " << noteName (highest)
+                      << "  (MIDI " << lowest << ".." << highest << ")\n"
+                      << "  span            " << juce::String (firstTick * beatsToSeconds, 2)
+                      << " s .. " << juce::String (lastTick * beatsToSeconds, 2) << " s\n"
+                      << "  mean note       "
+                      << juce::String (durationSum / noteCount * beatsToSeconds, 3) << " s"
+                      << "   mean velocity " << juce::String (velocitySum / noteCount, 1) << "\n";
+
+            std::cout << "\n  PITCH   NOTE   COUNT   SOUNDING\n";
+
+            for (int pitch = lowest; pitch <= highest; ++pitch)
+            {
+                if (perPitchCount[pitch] == 0)
+                    continue;
+
+                std::cout << "  " << juce::String (pitch).paddedLeft (' ', 5)
+                          << juce::String (noteName (pitch)).paddedLeft (' ', 7)
+                          << juce::String (perPitchCount[pitch]).paddedLeft (' ', 8)
+                          << juce::String (perPitchTicks[pitch] * beatsToSeconds, 2)
+                                 .paddedLeft (' ', 10)
+                          << " s\n";
+            }
+        }
+
+        return tempoBpm > 0.0 && noteCount > 0 ? 0 : 1;
+    }
+
+    int transcribeStem (const juce::File& stem, const juce::File& outMidi, double bpm)
+    {
+        if (! stem.existsAsFile())
+        {
+            std::cerr << "Stem not found: " << stem.getFullPathName() << "\n";
+            return 1;
+        }
+
+        const auto kind = stemKindFromName (stem);
+
+        std::cout << "Stem: " << stem.getFileName() << "\n"
+                  << "Kind: " << splittr::stemName (kind)
+                  << (splittr::MidiTranscriber::supports (kind) ? "" : "  (NOT SUPPORTED)") << "\n";
+
+        splittr::MidiTranscription info;
+        juce::String error;
+
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        auto lastPercent = -1;
+
+        const auto status = splittr::MidiTranscriber::transcribe (
+            stem, outMidi, bpm, kind,
+            [&lastPercent] (float p)
+            {
+                const auto percent = (int) (p * 100.0f) / 10 * 10;
+
+                if (percent != lastPercent)
+                {
+                    lastPercent = percent;
+                    std::cout << "[" << percent << "%]" << std::flush;
+                }
+            },
+            [] { return true; },
+            info, error);
+
+        std::cout << "\n";
+
+        if (status != splittr::MidiTranscriber::Status::ok)
+        {
+            std::cerr << (error.isNotEmpty() ? error : juce::String ("cancelled")) << "\n";
+            return 1;
+        }
+
+        const auto elapsed = (juce::Time::getMillisecondCounterHiRes() - start) / 1000.0;
+
+        std::cout << "Transcribed in " << juce::String (elapsed, 2) << " s"
+                  << "   tempo " << juce::String (info.bpm, 2)
+                  << (info.tempoDetected ? " (detected)" : " (fallback, absolute times)") << "\n";
+
+        return summariseMidiFile (outMidi, info.bpm);
+    }
+
     int analyzeFiles (int numFiles, char** paths)
     {
         splittr::AudioFileIO io;
@@ -56,10 +246,19 @@ int main (int argc, char** argv)
     if (argc >= 3 && juce::String (argv[1]) == "--analyze")
         return analyzeFiles (argc - 2, argv + 2);
 
+    if (argc >= 4 && juce::String (argv[1]) == "--midi")
+    {
+        const auto cwd = juce::File::getCurrentWorkingDirectory();
+
+        return transcribeStem (cwd.getChildFile (argv[2]), cwd.getChildFile (argv[3]),
+                               argc > 4 ? juce::String (argv[4]).getDoubleValue() : 0.0);
+    }
+
     if (argc != 4)
     {
         std::cerr << "Usage: splittr_cli <audio-in> <model.bin> <out-dir>\n"
-                  << "       splittr_cli --analyze <audio-in> [<audio-in> ...]\n";
+                  << "       splittr_cli --analyze <audio-in> [<audio-in> ...]\n"
+                  << "       splittr_cli --midi <stem.wav> <out.mid> [bpm]\n";
         return 1;
     }
 

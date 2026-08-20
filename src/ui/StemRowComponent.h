@@ -23,18 +23,29 @@ class StemRowComponent : public juce::Component
 public:
     StemRowComponent (juce::String displayName, bool accented);
 
+    // The MIDI chip's four states. `hidden` is the stems Basic Pitch has no
+    // business with — drums, and the summed instrumental (issue #19).
+    enum class MidiChip { hidden, idle, busy, done };
+
     std::function<void()> onMuteToggle;
     std::function<void (double)> onSeek; // fraction 0..1
+
+    // True when the click held a modifier — the only way to re-transcribe a
+    // stem that already has a .mid.
+    std::function<void (bool)> onMidiClick;
 
     void update (const juce::File& wav, const std::vector<float>& waveform, float peakDb,
                  bool isMuted, bool isPlaying, double positionSeconds, double lengthSeconds,
                  double emberClock);
+
+    void setMidi (MidiChip state, const juce::File& midiFile, float progress);
 
     void paint (juce::Graphics&) override;
 
     void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override;
     void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
 
@@ -56,8 +67,13 @@ public:
     static void endExternalDrag();
 
 private:
+    // Both drag-outs raise the same self-drop guard: the row's WAV and the
+    // chip's .mid are one gesture as far as issue #8 is concerned.
+    void startFileDrag (const juce::File&);
+
     juce::Rectangle<int> muteButtonBounds() const;
     juce::Rectangle<int> scrubberBounds() const;
+    juce::Rectangle<int> midiChipBounds() const; // empty while hidden
     juce::Rectangle<int> waveformBounds() const;
 
     int verticalPad() const;  // tightens on short rows
@@ -75,9 +91,18 @@ private:
     double position = 0.0, length = 0.0;
     double clock = 0.0;
 
+    MidiChip midi = MidiChip::hidden;
+    juce::File midiFile;
+    float midiProgress = 0.0f;
+
     bool hovered = false;
+    bool midiHovered = false;
     bool draggingOut = false;
     bool scrubbing = false;
+
+    // Which control the press landed on, so a gesture that starts on the chip
+    // never becomes the row's WAV drag.
+    bool pressedMidi = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemRowComponent)
 };

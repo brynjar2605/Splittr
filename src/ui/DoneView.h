@@ -36,6 +36,10 @@ public:
     std::function<void (int)> onMuteToggle;
     std::function<void (int, double)> onSeek; // (stem, fraction 0..1)
 
+    // (stem, force) — force is the modifier-click that re-transcribes a stem
+    // whose .mid already exists.
+    std::function<void (int, bool)> onMidi;
+
     void update (const EngineSnapshot&, bool isPlaying);
 
     void paint (juce::Graphics&) override;

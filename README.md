@@ -12,6 +12,10 @@ no training. A scan produces **five stems**: the four htdemucs sources
 voice, summed) — or **seven** in 6-stem mode, where `htdemucs_6s` adds
 **Guitar** and **Piano**. It detects the track's **BPM and key** along the way.
 
+A separated stem can also leave as **MIDI**: Spotify's **Basic Pitch** runs
+in-process on the pitched stems, and the resulting `.mid` drags onto a track
+the same way the audio does.
+
 ## Building
 
 Requirements: macOS 11+, Xcode command line tools, CMake ≥ 3.24.
@@ -33,6 +37,13 @@ per stem — five for a 4-source model, seven for `htdemucs_6s`:
 
 ```sh
 build/splittr_cli_artefacts/Release/splittr_cli <audio-in> <model.bin> <out-dir>
+```
+
+It also transcribes a single stem and reports what the written file actually
+contains, parsed back with `juce::MidiFile`:
+
+```sh
+build/splittr_cli_artefacts/Release/splittr_cli --midi <stem.wav> <out.mid> [bpm]
 ```
 
 ## Model weights
@@ -67,8 +78,17 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
 - **DRAG ALL** (done screen, left of the footer) drags every stem out at once.
   Ableton makes one track per file, so a whole stem session lands in the set in
   a single gesture. Dragging a single row still drags just that stem.
+- **MIDI chip** (done screen, on the right of a stem's title strip): click it to
+  transcribe that stem, then drag the chip onto a track to drop the `.mid` — a
+  MIDI clip rather than an audio one. It appears on **Vocals, Bass, Other,
+  Guitar and Piano**; drums are onset classification rather than pitch, and the
+  summed instrumental is a full mix, so neither offers it. A stem takes a few
+  seconds (a 2½-minute stem, about 2). Transcriptions live beside their stems
+  in the cache, so reopening a session finds them already done;
+  cmd-click a finished chip to run it again.
 - **EXPORT…** (done screen) copies every stem to a folder you choose
-  (remembered for next time); **REVEAL** opens the internal cache in Finder.
+  (remembered for next time), with each stem's `.mid` beside it where one
+  exists; **REVEAL** opens the internal cache in Finder.
 - Stems that leave the plugin — dragged or exported — are named
   `<song> - <Stem> - 124BPM - F#m.wav`, and carry the same values in their
   WAV LIST/INFO metadata. Whatever came back undetected is simply left out, so
@@ -98,4 +118,8 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
 - Splittr: **AGPLv3** (uses JUCE 8 under its open-source license)
 - [demucs.cpp](https://github.com/sevagh/demucs.cpp): MIT · Eigen: MPL2
 - htdemucs weights: MIT (Meta AI research model, ggml conversion by @sevagh)
+- Basic Pitch model and weights: Apache-2.0
+  ([spotify/basic-pitch](https://github.com/spotify/basic-pitch)), vendored via
+  [NeuralNote](https://github.com/DamRsn/NeuralNote) (Apache-2.0) with RTNeural
+  (BSD-3) and nlohmann/json (MIT) — see `third_party/basicpitch/PROVENANCE.md`
 - DM Mono font: SIL Open Font License

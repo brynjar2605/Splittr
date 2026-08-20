@@ -14,6 +14,20 @@ namespace
     constexpr int muteSize = 16;
     constexpr int elapsedWidth = 26;
 
+    // The MIDI chip: a hairline text chip in the TagButton idiom, shrunk to
+    // fit the 16px title strip. Width is fixed at the widest label so the
+    // transport cluster does not shuffle sideways when a transcription starts.
+    constexpr int midiChipHeight = 13;
+    constexpr int midiChipGap = 8;
+    constexpr float midiChipTextSize = 8.5f;
+
+    // The busy label is the wider of the two, so it is what the chip is
+    // measured against.
+    juce::String midiLabel (bool working)
+    {
+        return working ? juce::String::fromUTF8 ("MIDI\xe2\x80\xa6") : juce::String ("MIDI");
+    }
+
     // A click is a mouse-up that never travelled this far; anything beyond is
     // a drag, and drags belong to the external file drag-out.
     constexpr int clickSlop = 5;
@@ -63,6 +77,17 @@ void StemRowComponent::update (const juce::File& file, const std::vector<float>&
     repaint();
 }
 
+void StemRowComponent::setMidi (MidiChip state, const juce::File& file, float progress)
+{
+    if (midi == state && midiFile == file && juce::approximatelyEqual (midiProgress, progress))
+        return;
+
+    midi = state;
+    midiFile = file;
+    midiProgress = progress;
+    repaint();
+}
+
 // Seven rows only fit by giving up vertical padding; the title strip stays put
 // and the waveform absorbs the rest of the loss.
 int StemRowComponent::verticalPad() const
@@ -86,6 +111,19 @@ juce::Rectangle<int> StemRowComponent::scrubberBounds() const
 {
     const auto mute = muteButtonBounds();
     return { mute.getRight() + 8, mute.getY(), scrubberWidth, muteSize };
+}
+
+juce::Rectangle<int> StemRowComponent::midiChipBounds() const
+{
+    if (midi == MidiChip::hidden)
+        return {};
+
+    const auto font = theme::mono (midiChipTextSize, 0.08f);
+    const auto width = (int) std::ceil (ui::textWidth (font, midiLabel (true))) + 12;
+    const auto mute = muteButtonBounds();
+
+    return { mute.getX() - midiChipGap - width,
+             mute.getCentreY() - midiChipHeight / 2, width, midiChipHeight };
 }
 
 juce::Rectangle<int> StemRowComponent::waveformBounds() const
@@ -147,6 +185,41 @@ void StemRowComponent::paint (juce::Graphics& g)
         g.drawText (juce::String (peakDb, 1) + " dB",
                     titleRow.withTrimmedLeft ((int) ui::textWidth (nameFont, name) + 10),
                     juce::Justification::centredLeft);
+    }
+
+    // --- MIDI chip: idle outline, accent while working, filled once written ---
+    if (midi != MidiChip::hidden)
+    {
+        const auto chip = midiChipBounds();
+        const auto working = midi == MidiChip::busy;
+        const auto done = midi == MidiChip::done;
+
+        // Progress is the chip filling from the left rather than a separate
+        // bar: there is no room for one, and a stem is seconds of work.
+        if (working)
+        {
+            g.setColour (theme::accentTint15);
+            g.fillRect (chip.toFloat().withWidth ((float) chip.getWidth()
+                                                  * juce::jlimit (0.0f, 1.0f, midiProgress)));
+        }
+        else if (done)
+        {
+            g.setColour (theme::accentTint15);
+            g.fillRect (chip);
+        }
+
+        g.setColour (done || working ? theme::accentMid
+                     : midiHovered   ? theme::border35
+                                     : theme::lineSoft15);
+        g.drawRect (chip, 1);
+
+        g.setColour (working ? theme::accentSoft
+                     : done  ? theme::accentPale
+                     : midiHovered ? theme::text
+                                   : theme::text40);
+
+        g.setFont (theme::mono (midiChipTextSize, 0.08f));
+        g.drawText (midiLabel (working), chip, juce::Justification::centred);
     }
 
     // --- transport cluster: mute dot + shared scrubber ---
@@ -245,7 +318,8 @@ void StemRowComponent::paint (juce::Graphics& g)
 void StemRowComponent::mouseDown (const juce::MouseEvent& e)
 {
     draggingOut = false;
-    scrubbing = scrubberBounds().contains (e.getPosition());
+    pressedMidi = midiChipBounds().contains (e.getPosition());
+    scrubbing = ! pressedMidi && scrubberBounds().contains (e.getPosition());
 
     if (scrubbing && onSeek != nullptr)
         onSeek (juce::jlimit (0.0, 1.0,
@@ -262,26 +336,57 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
         return;
     }
 
-    if (! draggingOut && e.getDistanceFromDragStart() > 6
-        && ! muteButtonBounds().contains (e.getMouseDownPosition())
-        && wavFile.existsAsFile())
+    if (draggingOut || e.getDistanceFromDragStart() <= 6)
+        return;
+
+    // The chip is its own drag source: dragging a finished one hands the DAW
+    // the .mid, which lands as a MIDI clip instead of an audio one. Pressing
+    // an unfinished chip drags nothing — a stem with no transcription yet has
+    // nothing to give, and falling through to the WAV would be a lie.
+    if (pressedMidi)
     {
-        draggingOut = true;
-        beginExternalDrag();
+        if (midi != MidiChip::done || ! midiFile.existsAsFile())
+            return;
 
-        // The drag is asynchronous: the guard is lifted from the end-of-drag
-        // callback, which macOS delivers after the drop has been handled.
-        const auto started = juce::DragAndDropContainer::performExternalDragDropOfFiles (
-            { wavFile.getFullPathName() }, false, this,
-            [] { endExternalDrag(); });
-
-        if (! started)
-            endExternalDrag();
+        startFileDrag (midiFile);
+        return;
     }
+
+    if (! muteButtonBounds().contains (e.getMouseDownPosition()) && wavFile.existsAsFile())
+        startFileDrag (wavFile);
+}
+
+void StemRowComponent::startFileDrag (const juce::File& file)
+{
+    draggingOut = true;
+    beginExternalDrag();
+
+    // The drag is asynchronous: the guard is lifted from the end-of-drag
+    // callback, which macOS delivers after the drop has been handled.
+    const auto started = juce::DragAndDropContainer::performExternalDragDropOfFiles (
+        { file.getFullPathName() }, false, this,
+        [] { endExternalDrag(); });
+
+    if (! started)
+        endExternalDrag();
 }
 
 void StemRowComponent::mouseUp (const juce::MouseEvent& e)
 {
+    if (pressedMidi)
+    {
+        // A plain click on a finished chip does nothing — the gesture that
+        // chip is for is the drag. Only a modifier asks for it again.
+        if (! draggingOut && e.getDistanceFromDragStart() < clickSlop
+            && midiChipBounds().contains (e.getPosition())
+            && midi != MidiChip::busy && onMidiClick != nullptr)
+            onMidiClick (e.mods.isCommandDown() || e.mods.isAltDown());
+
+        pressedMidi = false;
+        draggingOut = false;
+        return;
+    }
+
     if (! draggingOut && ! scrubbing)
     {
         const auto waveArea = waveformBounds();
@@ -303,7 +408,30 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
     scrubbing = false;
 }
 
+void StemRowComponent::mouseMove (const juce::MouseEvent& e)
+{
+    const auto overChip = midiChipBounds().contains (e.getPosition());
+
+    if (overChip == midiHovered)
+        return;
+
+    midiHovered = overChip;
+
+    // A finished chip is dragged, an unstarted one is clicked; the cursor says
+    // which before the press does.
+    setMouseCursor (overChip && midi == MidiChip::idle ? juce::MouseCursor::PointingHandCursor
+                                                       : juce::MouseCursor::DraggingHandCursor);
+    repaint();
+}
+
 void StemRowComponent::mouseEnter (const juce::MouseEvent&) { hovered = true; repaint(); }
-void StemRowComponent::mouseExit (const juce::MouseEvent&) { hovered = false; repaint(); }
+
+void StemRowComponent::mouseExit (const juce::MouseEvent&)
+{
+    hovered = false;
+    midiHovered = false;
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    repaint();
+}
 
 } // namespace splittr
