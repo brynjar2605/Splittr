@@ -20,15 +20,26 @@ namespace
 
     constexpr float mutedAlpha = 0.4f;
 
-    // Set while a row is running an external file drag. The editor refuses file
-    // drops for as long as it is set, so releasing a dragged-out stem over the
-    // plugin window cannot discard the current session.
-    bool externalDragInProgress = false;
+    // Non-zero while a file drag this plugin started is in flight. The editor
+    // refuses file drops for as long as it is, so releasing dragged-out stems
+    // over the plugin window cannot discard the current session. A count rather
+    // than a flag: the rows and DoneView's DRAG ALL both raise it.
+    int externalDragsInFlight = 0;
 } // namespace
 
 bool StemRowComponent::isExternalDragInProgress()
 {
-    return externalDragInProgress;
+    return externalDragsInFlight > 0;
+}
+
+void StemRowComponent::beginExternalDrag()
+{
+    ++externalDragsInFlight;
+}
+
+void StemRowComponent::endExternalDrag()
+{
+    externalDragsInFlight = juce::jmax (0, externalDragsInFlight - 1);
 }
 
 StemRowComponent::StemRowComponent (juce::String displayName, bool accented)
@@ -253,16 +264,16 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
         && wavFile.existsAsFile())
     {
         draggingOut = true;
-        externalDragInProgress = true;
+        beginExternalDrag();
 
-        // The drag is asynchronous: the flag is cleared from the end-of-drag
+        // The drag is asynchronous: the guard is lifted from the end-of-drag
         // callback, which macOS delivers after the drop has been handled.
         const auto started = juce::DragAndDropContainer::performExternalDragDropOfFiles (
             { wavFile.getFullPathName() }, false, this,
-            [] { externalDragInProgress = false; });
+            [] { endExternalDrag(); });
 
         if (! started)
-            externalDragInProgress = false;
+            endExternalDrag();
     }
 }
 

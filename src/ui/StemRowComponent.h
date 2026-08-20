@@ -43,10 +43,17 @@ public:
     static constexpr int maxRowHeight = 53;
     static constexpr int compactBelow = 46;
 
-    // True while any row is running an external file drag. The editor checks
-    // this to refuse file drops, so a stem dragged out and released over the
-    // plugin window cannot discard the current stems (issue #8).
+    // True while a file drag this plugin started is still in flight. The editor
+    // checks this to refuse file drops, so a stem dragged out and released over
+    // the plugin window cannot discard the current stems (issue #8).
     static bool isExternalDragInProgress();
+
+    // Bracket one external file drag. The rows hold this around their own
+    // drag-out and DoneView's DRAG ALL holds it around the multi-file drag, so
+    // both gestures raise the one guard instead of keeping two flags in step.
+    // Counted, not flagged: it lifts when the last drag in flight ends.
+    static void beginExternalDrag();
+    static void endExternalDrag();
 
 private:
     juce::Rectangle<int> muteButtonBounds() const;

@@ -55,6 +55,9 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   expect them to bleed — the other five stems are also slightly weaker than
   FAST's. Each mode caches separately, so switching never re-runs a mode you
   have already used on that file.
+- **DRAG ALL** (done screen, left of the footer) drags every stem out at once.
+  Ableton makes one track per file, so a whole stem session lands in the set in
+  a single gesture. Dragging a single row still drags just that stem.
 - **EXPORT…** (done screen) copies every stem, named
   `<song> - <Stem>.wav`, to a folder you choose (remembered for next time);
   **REVEAL** opens the internal cache in Finder.
