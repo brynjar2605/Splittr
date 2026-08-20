@@ -7,7 +7,10 @@ namespace splittr
 namespace
 {
     constexpr int padX = 16, padY = 14;
-    constexpr int footerHeight = 13;
+
+    // Tall enough for a real transport button; the text actions centre in it.
+    constexpr int footerHeight = 22;
+    constexpr int playButtonSize = 20;
 
     // Five rows keep the design's 53px and its 6px gutter; seven only fit by
     // halving the gutter, which lands them at ~40px.
@@ -119,7 +122,45 @@ void DoneView::paint (juce::Graphics& g)
         return r;
     };
 
-    // Leftmost: the whole session in one gesture. A grip rather than a button,
+    // Leftmost: the one global transport control — a real button, not a
+    // footnote (it started life as 9px of text nobody registered as a
+    // transport). Accent ring, filled glyph, the rows' circle language.
+    {
+        playBounds = { x, footer.getCentreY() - playButtonSize / 2,
+                       playButtonSize, playButtonSize };
+
+        const auto circle = playBounds.toFloat();
+        const auto engaged = playing || hoveredAction == 4;
+
+        if (engaged)
+        {
+            g.setColour (theme::accentTint15);
+            g.fillEllipse (circle);
+        }
+
+        g.setColour (engaged ? theme::accentMid : theme::accentTint35);
+        g.drawEllipse (circle.reduced (0.5f), 1.0f);
+
+        g.setColour (playing || hoveredAction == 4 ? theme::accentSoft : theme::text50);
+
+        if (playing)
+        {
+            const auto c = circle.getCentre();
+            g.fillRect (c.x - 3.0f, c.y - 3.5f, 2.0f, 7.0f);
+            g.fillRect (c.x + 1.0f, c.y - 3.5f, 2.0f, 7.0f);
+        }
+        else
+        {
+            juce::Path triangle;
+            const auto c = circle.getCentre();
+            triangle.addTriangle (c.x - 2.5f, c.y - 4.0f, c.x - 2.5f, c.y + 4.0f, c.x + 4.5f, c.y);
+            g.fillPath (triangle);
+        }
+
+        x = playBounds.getRight() + 12;
+    }
+
+    // The whole session in one gesture. A grip rather than a button,
     // because it is dragged and not clicked — the rows carry the same dot grid.
     {
         const auto gripLeft = x;
@@ -135,10 +176,6 @@ void DoneView::paint (juce::Graphics& g)
         x += dragGripWidth + dragGripGap;
         dragAllBounds = drawAction ("DRAG ALL", 5, theme::accentSoft).withLeft (gripLeft);
     }
-
-    // The one global transport control for every stem.
-    playBounds = drawAction (playing ? "PAUSE" : "PLAY", 4,
-                             playing ? theme::accentSoft : theme::text50);
 
     g.setColour (theme::text50);
     g.drawText (statsText, x, footer.getY(), (int) ui::textWidth (font, statsText) + 2,
