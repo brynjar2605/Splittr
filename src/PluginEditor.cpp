@@ -1,5 +1,6 @@
 #include "PluginEditor.h"
 #include "ui/Theme.h"
+#include "engine/Diagnostics.h"
 #include "engine/MidiTranscriber.h"
 #include "engine/StemCache.h"
 
@@ -20,6 +21,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     content.addChildComponent (tuneView);     // over the done view it shapes
     content.addChildComponent (libraryView);
     content.addChildComponent (settingsView); // added last: sits on top
+    content.addChildComponent (diagView);     // above even settings: opened from it
 
     // Fixed design-space layout; the window scales this surface uniformly.
     content.setBounds (0, 0, theme::editorWidth, theme::editorHeight);
@@ -34,6 +36,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         tuneView.setBounds (bounds);
         libraryView.setBounds (bounds);
         settingsView.setBounds (bounds);
+        diagView.setBounds (bounds);
     }
 
     auto& engine = splittrProcessor.getEngine();
@@ -61,6 +64,16 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     };
 
     settingsView.onClose = [this] { showSettings = false; };
+
+    // DIAGNOSTICS (issue #28): the report is rebuilt on every open, so what
+    // the panel shows is the state at the moment it was asked for.
+    settingsView.onDiagnostics = [this, &engine]
+    {
+        diagView.show (splittr::buildDiagnosticsReport (engine));
+        showDiag = true;
+    };
+
+    diagView.onClose = [this] { showDiag = false; };
 
     settingsView.onModeChange = [this] (splittr::theme::Mode m)
     {
@@ -611,6 +624,12 @@ void SplittrAudioProcessorEditor::timerCallback()
     audition.setSpectrumStem (showTune ? tuneView.currentStem() : -1);
     libraryView.setVisible (showLibrary);
     settingsView.setVisible (showSettings);
+
+    // The report overlay belongs to settings: closing settings closes it too.
+    if (! showSettings)
+        showDiag = false;
+
+    diagView.setVisible (showDiag);
 
     if (showIdle)
     {

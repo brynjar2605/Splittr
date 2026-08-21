@@ -1,6 +1,7 @@
 #pragma once
 
 #include <juce_audio_formats/juce_audio_formats.h>
+#include <deque>
 #include <vector>
 
 #include "Phase.h"
@@ -27,6 +28,12 @@ struct EngineSnapshot
 
     double bpm = 0.0;  // 0 = undetected
     juce::String key;  // "F# MIN" etc., empty = undetected
+
+    // How the bpm figure came to be (issue #28: the diagnostics report should
+    // say "declined on the mix, the drums answered" rather than leave a bare
+    // number to be argued with).
+    double bpmConfidence = 0.0;
+    bool bpmFromDrums = false;
 
     // A stem's transcription: idle until asked for, done once the .mid is on
     // disk beside the WAV. Detected on reopen, so a cached entry comes back
@@ -137,6 +144,17 @@ public:
 
     EngineSnapshot getSnapshot() const;
 
+    // The rolling event log behind the DIAGNOSTICS report (issue #28):
+    // timestamped one-liners at the engine's own state transitions — phases,
+    // downloads, analysis verdicts, backend fallbacks, renders, errors. Ring
+    // of ~200; logEvent is safe from any thread (same lock as the snapshot,
+    // never held while doing work).
+    void logEvent (const juce::String& line);
+    juce::StringArray eventLog() const;
+
+    // Read-only, for the diagnostics report's models section.
+    const ModelManager& modelManager() const { return models; }
+
     // True when this file, in the current mode, would republish from cache
     // instantly — i.e. accepting it costs no work. The editor uses it to decide
     // whether the drop needs confirming.
@@ -180,6 +198,7 @@ private:
 
     juce::ThreadPool pool;
     mutable juce::CriticalSection lock;
+    std::deque<juce::String> events; // guarded by `lock`, capped in logEvent
     EngineSnapshot snapshot;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeparationEngine)

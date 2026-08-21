@@ -117,7 +117,10 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   effect (fine matrix cells or the original coarse bars), and PROCESSING,
   which runs separation on the CPU or on the Apple Silicon GPU (Metal, greyed
   out where it isn't available, and falling back to the CPU for any run it
-  can't take). Preferences are global and persist.
+  can't take). DIAGNOSTICS in the panel's corner opens a copyable report —
+  build, machine, compute state, the last run and the engine's event log —
+  for pasting into a bug report; nothing is sent anywhere by itself.
+  Preferences are global and persist.
 - **BPM** comes from a multi-band onset/tempogram detector with octave
   disambiguation, validated to ±2% on steady-tempo material; when the pulse
   is too ambiguous (rubato, free time) it reports nothing rather than a

@@ -1021,6 +1021,29 @@ namespace metal
         return available;
     }
 
+    std::string statusString()
+    {
+        // Mirrors gpuAvailable's gates in order, naming the one that refused.
+        if (std::getenv ("SPLITTR_NO_GPU") != nullptr)
+            return "disabled by SPLITTR_NO_GPU";
+
+        if (@available (macOS 14.0, *))
+        {
+            id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+
+            if (device == nil)
+                return "unavailable: no Metal device";
+
+            if (! [device supportsFamily: MTLGPUFamilyApple7])
+                return std::string ("unavailable: GPU below Apple7 family (")
+                       + device.name.UTF8String + ")";
+
+            return std::string ("available (") + device.name.UTF8String + ")";
+        }
+
+        return "unavailable: macOS 14+ required";
+    }
+
     bool inference (const demucscpp::demucs_model& model,
                     const float* interleavedStereo,
                     int numSamples,

@@ -8,6 +8,7 @@
 #include "ui/WorkingView.h"
 #include "ui/DoneView.h"
 #include "ui/ConfirmView.h"
+#include "ui/DiagnosticsView.h"
 #include "ui/SettingsView.h"
 #include "ui/LibraryView.h"
 #include "ui/TuneView.h"
@@ -59,6 +60,7 @@ private:
     splittr::TuneView tuneView;         // per-stem shaping, opened from a row's mix icon
     splittr::LibraryView libraryView;   // cache browser, opened from the idle screen
     splittr::SettingsView settingsView; // prefs, opened from the header mark
+    splittr::DiagnosticsView diagView;  // the copyable report, opened from settings
 
     std::unique_ptr<juce::FileChooser> chooser;
     double animationClock = 0.0;
@@ -70,6 +72,7 @@ private:
     bool showSettings = false;
     bool showLibrary = false;
     bool showTune = false; // only meaningful while the done view is up
+    bool showDiag = false; // sits above settings, which stays open behind it
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessorEditor)
 };
