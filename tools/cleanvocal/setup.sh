@@ -35,6 +35,16 @@ if [ ! -x "$PY311" ]; then
     exit 1
 fi
 
+# audio-separator shells out to ffmpeg by name at run time (issue #30), so
+# absence is caught here, at install time, rather than minutes into a render.
+# The pipeline repairs PATH for GUI-launched hosts; setup just checks the
+# binary exists somewhere it will find it.
+if ! PATH="$PATH:/opt/homebrew/bin:/usr/local/bin" command -v ffmpeg >/dev/null; then
+    echo "error: ffmpeg not found." >&2
+    echo "audio-separator needs it at run time. Install it with: brew install ffmpeg" >&2
+    exit 1
+fi
+
 say "runtime root: $ROOT"
 mkdir -p "$ROOT" "$ROOT/models"
 

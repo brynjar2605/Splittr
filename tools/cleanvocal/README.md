@@ -10,6 +10,7 @@ holds the sidecar's source; the contract both sides implement is
 
 ```
 brew install python@3.11   # if missing
+brew install ffmpeg        # audio-separator shells out to it at run time
 tools/cleanvocal/setup.sh
 ```
 
