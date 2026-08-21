@@ -93,9 +93,13 @@ void WorkingView::paint (juce::Graphics& g)
     left.removeFromBottom (8);
     auto box = left; // waveform box fills the rest
 
+    const auto rulerFont = theme::mono (9.0f, 0.1f);
+    const auto durationLabel = ui::mmss (snap.sourceDuration);
+
     g.setColour (theme::text45);
-    g.setFont (theme::mono (9.0f, 0.1f));
+    g.setFont (rulerFont);
     g.drawText ("0:00", ruler, juce::Justification::centredLeft);
+    g.drawText (durationLabel, ruler, juce::Justification::centredRight);
 
     auto centreLabel = ui::upperCased (snap.sourceFile.getFileName());
     if (snap.bpm > 0.0)
@@ -103,8 +107,13 @@ void WorkingView::paint (juce::Graphics& g)
     if (snap.key.isNotEmpty())
         centreLabel += juce::String::fromUTF8 (" \xc2\xb7 ") + snap.key;
 
-    g.drawText (centreLabel, ruler, juce::Justification::centred);
-    g.drawText (ui::mmss (snap.sourceDuration), ruler, juce::Justification::centredRight);
+    // The title lives between the two times, not under them: a long filename
+    // ellipsises rather than colliding with either end of the ruler.
+    const auto sideWidth = juce::jmax ((int) std::ceil (ui::textWidth (rulerFont, "0:00")),
+                                       (int) std::ceil (ui::textWidth (rulerFont, durationLabel)));
+
+    g.drawText (centreLabel, ruler.reduced (sideWidth + 10, 0),
+                juce::Justification::centred, true);
 
     // waveform box: panel + 13px grid
     g.setColour (theme::bgPanel);
