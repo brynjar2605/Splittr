@@ -22,6 +22,7 @@ public:
     std::function<void (float, bool)> onAccentHueChange; // (hue 0..1, commit)
     std::function<void (bool)> onFireGrainChange;        // true = fine grain
     std::function<void()> onClose;
+    std::function<void()> onDiagnostics; // opens the report overlay (issue #28)
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -38,10 +39,12 @@ private:
     juce::Rectangle<int> darkBounds, lightBounds, hueStripBounds, closeBounds;
     juce::Rectangle<int> fineBounds, coarseBounds;
     juce::Rectangle<int> cpuBounds, gpuBounds;
+    juce::Rectangle<int> diagBounds;
 
     bool draggingHue = false;
 
-    // 0 none, 1 dark, 2 light, 3 close, 4 fine, 5 coarse, 6 cpu, 7 gpu
+    // 0 none, 1 dark, 2 light, 3 close, 4 fine, 5 coarse, 6 cpu, 7 gpu,
+    // 8 diagnostics
     int hoveredAction = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SettingsView)

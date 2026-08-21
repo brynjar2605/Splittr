@@ -245,6 +245,15 @@ bool DemucsSeparator::gpuAvailable()
    #endif
 }
 
+juce::String DemucsSeparator::gpuStatus()
+{
+   #if JUCE_MAC
+    return juce::String (metal::statusString());
+   #else
+    return "unavailable: not macOS";
+   #endif
+}
+
 DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>& modelFiles,
                                                    const juce::AudioBuffer<float>& stereo44k,
                                                    const std::function<void (float, const juce::String&)>& onProgress,

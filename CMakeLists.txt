@@ -59,9 +59,11 @@ target_sources(Splittr PRIVATE
     src/ui/DoneView.cpp
     src/ui/ConfirmView.cpp
     src/ui/SettingsView.cpp
+    src/ui/DiagnosticsView.cpp
     src/ui/LibraryView.cpp
     src/engine/AudioFileIO.cpp
     src/engine/DemucsSeparator.cpp
+    src/engine/Diagnostics.cpp
     src/engine/MidiTranscriber.cpp
     src/engine/SeparationEngine.cpp
     src/engine/ModelManager.cpp
@@ -73,6 +75,23 @@ target_sources(Splittr PRIVATE
     src/ui/TuneView.cpp)
 
 target_include_directories(Splittr PRIVATE src)
+
+# --- Build identity for the DIAGNOSTICS report (issue #28) ---
+# Regenerated on every build so the git hash in a bug report is the binary's,
+# not the last configure's; copy_if_different keeps unchanged identities from
+# dirtying the build.
+set(SPLITTR_BUILDINFO_DIR "${CMAKE_BINARY_DIR}/buildinfo")
+
+add_custom_target(SplittrBuildInfo
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+        -DOUT_DIR=${SPLITTR_BUILDINFO_DIR}
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/BuildInfo.cmake
+    BYPRODUCTS "${SPLITTR_BUILDINFO_DIR}/SplittrBuildInfo.h"
+    VERBATIM)
+
+add_dependencies(Splittr SplittrBuildInfo)
+target_include_directories(Splittr PRIVATE "${SPLITTR_BUILDINFO_DIR}")
 
 target_compile_definitions(Splittr PUBLIC
     JUCE_WEB_BROWSER=0

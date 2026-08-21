@@ -28,6 +28,11 @@ namespace metal
     // call; safe from any thread.
     bool gpuAvailable();
 
+    // One human-readable line for the diagnostics report (issue #28): the
+    // device name when available, and WHICH gate refused when not — the
+    // availability bool alone has proven undiagnosable from a bug report.
+    std::string statusString();
+
     // Full-track separation on the GPU: mirrors demucs.cpp's demucs_inference
     // driver (ref-mean/std normalisation, one random shift, 7.8 s segments
     // with 0.25 overlap and transition-weighted overlap-add) with the

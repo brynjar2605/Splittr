@@ -289,6 +289,8 @@ public:
         if (missing.empty())
             return DownloadOutcome::ok;
 
+        engine.logEvent ("downloading " + juce::String ((int) missing.size()) + " model file(s)");
+
         juce::int64 totalBytes = 0;
 
         for (const auto& missingFile : missing)
@@ -358,6 +360,7 @@ public:
             }
 
             doneBytes += expectedBytes;
+            engine.logEvent ("downloaded " + target.getFileName());
         }
 
         return DownloadOutcome::ok;
@@ -417,6 +420,7 @@ public:
     {
         const auto fail = [this] (juce::String reason)
         {
+            engine.logEvent ("error: " + reason);
             engine.mutate (generation, [reason] (EngineSnapshot& s)
             {
                 s.phase = Phase::Error;
@@ -469,7 +473,20 @@ public:
         const auto numModels = (int) engine.models.filesFor (quality).size();
         const auto segmentCount = numModels * DemucsSeparator::expectedSegments (decoded.buffer.getNumSamples());
 
+        engine.logEvent ("decoded " + source.getFileName() + ": "
+                         + juce::String (duration, 1) + " s @ "
+                         + juce::String (decoded.originalSampleRate, 0) + " Hz");
+
         auto analysis = TrackAnalyzer::analyze (decoded.buffer);
+        auto bpmFromDrums = false;
+
+        engine.logEvent (analysis.bpm > 0.0
+                             ? "mix analysis: " + juce::String (analysis.bpm, 1) + " BPM (conf "
+                                   + juce::String (analysis.bpmConfidence, 2) + "), key "
+                                   + (analysis.key.isNotEmpty() ? analysis.key : juce::String ("none"))
+                             : "mix analysis: bpm declined (conf "
+                                   + juce::String (analysis.bpmConfidence, 2) + "), key "
+                                   + (analysis.key.isNotEmpty() ? analysis.key : juce::String ("none")));
 
         engine.mutate (generation, [&] (EngineSnapshot& s)
         {
@@ -479,8 +496,13 @@ public:
             s.sourceWaveform = sourceWave;
             s.segmentCount = segmentCount;
             s.bpm = analysis.bpm;
+            s.bpmConfidence = analysis.bpmConfidence;
             s.key = analysis.key;
         });
+
+        engine.logEvent ("separating: " + juce::String (ModelManager::qualityToken (quality))
+                         + ", backend requested "
+                         + (SeparationEngine::backend() == ComputeBackend::gpu ? "gpu" : "cpu"));
 
         // --- separate -----------------------------------------------------
         const auto inferenceStart = juce::Time::getMillisecondCounterHiRes();
@@ -521,6 +543,10 @@ public:
 
         const auto inferenceSeconds = (juce::Time::getMillisecondCounterHiRes() - inferenceStart) / 1000.0;
 
+        engine.logEvent ("separated in " + juce::String (inferenceSeconds, 1) + " s ("
+                         + juce::String (decoded.durationSeconds / juce::jmax (0.001, inferenceSeconds), 2)
+                         + "x RT) on " + (result.ranOnGpu ? "gpu" : "cpu"));
+
         // The weights decide how many sources came back; if that disagrees with
         // the mode the user picked, the model set on disk is not what its
         // filename claims.
@@ -543,6 +569,12 @@ public:
                 const auto fromDrums = TrackAnalyzer::analyze (result.stems[(size_t) drums]);
                 analysis.bpm = fromDrums.bpm;
                 analysis.bpmConfidence = fromDrums.bpmConfidence;
+                bpmFromDrums = analysis.bpm > 0.0;
+
+                engine.logEvent (bpmFromDrums
+                                     ? "drums fallback: " + juce::String (analysis.bpm, 1)
+                                           + " BPM (conf " + juce::String (analysis.bpmConfidence, 2) + ")"
+                                     : juce::String ("drums fallback: declined too"));
             }
         }
 
@@ -620,6 +652,9 @@ public:
 
         meta.writeTo (entry.meta);
 
+        engine.logEvent (juce::String (numStems) + " stems written to cache/"
+                         + entry.dir.getFileName());
+
         StemCache::prune();
 
         engine.mutate (generation, [&] (EngineSnapshot& s)
@@ -653,6 +688,8 @@ public:
             // Republished: the drums fallback may have filled in a tempo the
             // pre-separation pass could not (issue #27).
             s.bpm = analysis.bpm;
+            s.bpmConfidence = analysis.bpmConfidence;
+            s.bpmFromDrums = bpmFromDrums;
 
             s.usedGpu = result.ranOnGpu;
             s.gpuRequested = SeparationEngine::backend() == ComputeBackend::gpu;
@@ -681,6 +718,8 @@ public:
     {
         const auto midi = MidiTranscriber::midiFileFor (wav);
 
+        engine.logEvent ("transcribing " + wav.getFileName());
+
         MidiTranscription info;
         juce::String error;
 
@@ -708,6 +747,7 @@ public:
             // Error phase — and a failed transcription costs nothing to retry,
             // so the honest thing is to look untried again.
             jassertquiet (error.isNotEmpty());
+            engine.logEvent ("transcription failed: " + error);
 
             publish ([] (EngineSnapshot::StemInfo& s)
             {
@@ -717,6 +757,9 @@ public:
 
             return jobHasFinished;
         }
+
+        engine.logEvent ("transcribed: " + midi.getFileName()
+                         + " (" + juce::String (info.noteCount) + " notes)");
 
         publish ([midi] (EngineSnapshot::StemInfo& s)
         {
@@ -774,6 +817,31 @@ void SeparationEngine::mutate (int gen, const std::function<void (EngineSnapshot
 
     const juce::ScopedLock sl (lock);
     fn (snapshot);
+}
+
+void SeparationEngine::logEvent (const juce::String& line)
+{
+    // The diagnostics event log (issue #28). Formatting happens outside the
+    // lock; the lock only guards the push and the cap.
+    const auto stamped = juce::Time::getCurrentTime().formatted ("%H:%M:%S ") + line;
+
+    const juce::ScopedLock sl (lock);
+    events.push_back (stamped);
+
+    while (events.size() > 200)
+        events.pop_front();
+}
+
+juce::StringArray SeparationEngine::eventLog() const
+{
+    const juce::ScopedLock sl (lock);
+
+    juce::StringArray lines;
+
+    for (const auto& event : events)
+        lines.add (event);
+
+    return lines;
 }
 
 EngineSnapshot SeparationEngine::getSnapshot() const
@@ -989,6 +1057,8 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
     if (found == 0)
         return false; // stems gone: nothing to reopen
 
+    logEvent ("library open: " + cacheDir.getFileName());
+
     const auto numSources = stemNames.size() - 1; // every stem but the instrumental
     const auto gen = generation.fetch_add (1) + 1;
 
@@ -1062,7 +1132,12 @@ void SeparationEngine::requestSeparation (const juce::File& file)
     pool.removeAllJobs (true, 0);
 
     if (tryPublishCached (file, gen, quality))
+    {
+        logEvent ("cache hit: " + file.getFileName());
         return;
+    }
+
+    logEvent ("scan requested: " + file.getFileName());
 
     {
         const juce::ScopedLock sl (lock);
@@ -1202,8 +1277,13 @@ juce::File SeparationEngine::processedStemFile (int stemIndex)
     // synchronous bounce has no race with the job that owns the entry. A
     // 4-minute stereo stem is well under a second, so the first drag after a
     // tweak pays a beat and every later one is instant.
+    logEvent ("bouncing tuned " + wav.getFileName());
+
     if (! bounceStem (wav, tuned, fx))
+    {
+        logEvent ("bounce failed, handing over the raw stem");
         return wav; // nothing shaped to hand over: better the raw stem than none
+    }
 
     juce::StringPairArray values;
     values.set (fxBouncedAttribute (name), descriptor);
@@ -1214,6 +1294,8 @@ juce::File SeparationEngine::processedStemFile (int stemIndex)
 
 void SeparationEngine::requestCancel()
 {
+    logEvent ("cancel requested");
+
     const auto wasDownloadOnly = [this]
     {
         const juce::ScopedLock sl (lock);

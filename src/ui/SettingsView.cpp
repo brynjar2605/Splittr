@@ -117,10 +117,14 @@ void SettingsView::paint (juce::Graphics& g)
     closeBounds = ui::drawTagAction (g, "CLOSE", footer.getX(), footer.getY(),
                                      hoveredAction == 3, theme::line, theme::text55);
 
-    g.setColour (theme::text40);
-    g.setFont (theme::mono (9.5f, 0.08f));
-    g.drawText (juce::String::fromUTF8 ("\xe2\x86\x92 ~/\xe2\x80\xa6/Splittr/Settings.xml"),
-                footer, juce::Justification::centredRight);
+    // The path hint moved into the diagnostics report itself, which lists the
+    // settings file along with everything else a bug report wants (issue #28).
+    const auto diagWidth =
+        (int) std::ceil (ui::textWidth (theme::mono (9.5f, 0.08f), "DIAGNOSTICS")) + 24;
+
+    diagBounds = ui::drawTagAction (g, "DIAGNOSTICS",
+                                    footer.getRight() - diagWidth, footer.getY(),
+                                    hoveredAction == 8, theme::line, theme::text55);
 }
 
 void SettingsView::sendHue (const juce::MouseEvent& e, bool commit)
@@ -186,6 +190,14 @@ void SettingsView::mouseUp (const juce::MouseEvent& e)
         return;
     }
 
+    if (diagBounds.contains (p))
+    {
+        if (onDiagnostics != nullptr)
+            onDiagnostics();
+
+        return;
+    }
+
     // CLOSE, or a click on the scrim outside the panel.
     if ((closeBounds.contains (p) || ! panelBounds().contains (p)) && onClose != nullptr)
         onClose();
@@ -203,6 +215,7 @@ void SettingsView::mouseMove (const juce::MouseEvent& e)
                         : coarseBounds.contains (p) ? 5
                         : cpuBounds.contains (p)    ? 6
                         : gpuBounds.contains (p) && SeparationEngine::gpuAvailable() ? 7
+                        : diagBounds.contains (p)   ? 8
                                                     : 0;
 
     const bool overStrip = hueStripBounds.contains (p);

@@ -75,6 +75,11 @@ public:
     // the CPU path; this exists so the settings UI can say so up front.
     static bool gpuAvailable();
 
+    // Why gpuAvailable() says what it says, one line for the diagnostics
+    // report (issue #28): device name when available, the refusing gate when
+    // not.
+    static juce::String gpuStatus();
+
     // Rough number of progress-callback segments inference will report
     // (7.8 s windows, 25% overlap, 2 shift passes) — for "seg i/j" UI copy.
     static int expectedSegments (int numSamples);
