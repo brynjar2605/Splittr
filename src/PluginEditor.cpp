@@ -234,6 +234,10 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     setSize (juce::roundToInt (theme::editorWidth * scale),
              juce::roundToInt (theme::editorHeight * scale));
 
+    // Space is the transport (keyPressed below); the editor has to want focus
+    // for the host to hand it key events at all.
+    setWantsKeyboardFocus (true);
+
     startTimerHz (30);
 
     engine.editorOpened();
@@ -249,6 +253,22 @@ SplittrAudioProcessorEditor::~SplittrAudioProcessorEditor()
 void SplittrAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (theme::bg);
+}
+
+bool SplittrAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    // Space = the footer transport button, whenever a session is up — the
+    // overlays included, since tuning while listening is the whole point of
+    // the audition. Anything else stays the host's (space is consumed here,
+    // which is what makes it the STEM transport rather than Live's).
+    if (key == juce::KeyPress::spaceKey
+        && splittrProcessor.getEngine().getSnapshot().phase == Phase::Ready)
+    {
+        splittrProcessor.getAudition().togglePlay (stemFiles());
+        return true;
+    }
+
+    return false;
 }
 
 void SplittrAudioProcessorEditor::resized()
@@ -662,6 +682,27 @@ void SplittrAudioProcessorEditor::timerCallback()
         }
 
         doneView.update (snap, playing); // rebuilds the rows when the stem set changes
+
+        // A fresh stem set starts with VOCALS + INSTRUMENTAL audible and the
+        // individual sources muted: that pair IS the whole song exactly once,
+        // where all-audible plays the non-vocal half twice (the instrumental
+        // is the sum of the others). It also stops one song's mute pattern
+        // leaking into the next by row index.
+        {
+            juce::StringArray stems;
+
+            for (const auto& stem : snap.stems)
+                stems.add (stem.wav.getFullPathName());
+
+            if (stems != defaultedStems)
+            {
+                defaultedStems = stems;
+
+                for (int i = 0; i < (int) snap.stems.size(); ++i)
+                    audition.setMuted (i, snap.stems[(size_t) i].kind != splittr::stemVocals
+                                          && snap.stems[(size_t) i].kind != splittr::stemInstrumental);
+            }
+        }
 
         for (int i = 0; i < juce::jmin ((int) snap.stems.size(), doneView.numRows()); ++i)
         {

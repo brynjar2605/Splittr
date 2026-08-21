@@ -25,6 +25,10 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
+    // Space toggles the stem transport while a session is up — the same
+    // gesture the footer button offers, without the mouse trip.
+    bool keyPressed (const juce::KeyPress&) override;
+
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
     void fileDragEnter (const juce::StringArray&, int, int) override;
@@ -73,6 +77,11 @@ private:
     bool showLibrary = false;
     bool showTune = false; // only meaningful while the done view is up
     bool showDiag = false; // sits above settings, which stays open behind it
+
+    // The stem set the mute defaults were last applied to (vocals +
+    // instrumental audible, sources muted): re-applied only when the set
+    // itself changes, so the user's own toggles survive within a session.
+    juce::StringArray defaultedStems;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SplittrAudioProcessorEditor)
 };
