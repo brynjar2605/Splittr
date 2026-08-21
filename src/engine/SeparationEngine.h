@@ -67,6 +67,12 @@ struct EngineSnapshot
     double inferenceSeconds = 0.0;
     double realtimeFactor = 0.0;
 
+    // What actually ran the separation (issue #27): a gpu request can fall
+    // back to the CPU (no Metal, 6-STEM, a mid-run failure), and the done
+    // view should say so rather than leave the user guessing at the speed.
+    bool usedGpu = false;
+    bool gpuRequested = false; // false on reopened entries: nothing to flag
+
     juce::int64 downloadDone = 0, downloadTotal = 0;
     double downloadMBps = 0.0;
 };

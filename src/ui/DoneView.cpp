@@ -86,6 +86,14 @@ void DoneView::update (const EngineSnapshot& s, bool isPlaying)
         statsText << s.key << dot;
 
     statsText << juce::String (s.realtimeFactor, 2) + "x RT";
+
+    // What did the work (issue #27). A gpu request the run could not honour
+    // says so — that is the difference between "fast mode" and "why was that
+    // slow", surfaced where the timing already lives.
+    statsText << dot
+              << (s.usedGpu             ? "GPU"
+                  : s.gpuRequested      ? "CPU (GPU FELL BACK)"
+                                        : "CPU");
     repaint();
 }
 

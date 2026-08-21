@@ -469,7 +469,7 @@ public:
         const auto numModels = (int) engine.models.filesFor (quality).size();
         const auto segmentCount = numModels * DemucsSeparator::expectedSegments (decoded.buffer.getNumSamples());
 
-        const auto analysis = TrackAnalyzer::analyze (decoded.buffer);
+        auto analysis = TrackAnalyzer::analyze (decoded.buffer);
 
         engine.mutate (generation, [&] (EngineSnapshot& s)
         {
@@ -526,6 +526,25 @@ public:
         // filename claims.
         if (result.numSources != sourceCountFor (quality))
             return fail ("MODEL DOES NOT MATCH ENGINE MODE");
+
+        // The mix can be genuinely ambiguous — issue #27's example is torn
+        // 4:3 between two readings and rightly declines — but the separation
+        // just manufactured the cleanest tempo evidence there is. When the
+        // mix said nothing, ask the drums stem; measured on that example, the
+        // drums answer decisively (and on tracks where the mix does detect,
+        // the two agree to the decimal). The key stays the mix's — a
+        // drums-stem "key" is noise.
+        if (analysis.bpm <= 0.0)
+        {
+            const auto drums = result.indexOfKind (stemDrums);
+
+            if (drums >= 0)
+            {
+                const auto fromDrums = TrackAnalyzer::analyze (result.stems[(size_t) drums]);
+                analysis.bpm = fromDrums.bpm;
+                analysis.bpmConfidence = fromDrums.bpmConfidence;
+            }
+        }
 
         // --- render + cache -----------------------------------------------
         engine.mutate (generation, [] (EngineSnapshot& s)
@@ -588,6 +607,7 @@ public:
         meta.setAttribute ("duration", duration);
         meta.setAttribute ("inferenceSeconds", inferenceSeconds);
         meta.setAttribute ("realtimeFactor", rtFactor);
+        meta.setAttribute ("backend", result.ranOnGpu ? "gpu" : "cpu");
         meta.setAttribute ("bpm", analysis.bpm);
         meta.setAttribute ("key", analysis.key);
         meta.setAttribute ("sourceWave", metaCsv (sourceWave));
@@ -629,6 +649,13 @@ public:
             s.inferenceSeconds = inferenceSeconds;
             s.realtimeFactor = rtFactor;
             s.etaSeconds = -1.0;
+
+            // Republished: the drums fallback may have filled in a tempo the
+            // pre-separation pass could not (issue #27).
+            s.bpm = analysis.bpm;
+
+            s.usedGpu = result.ranOnGpu;
+            s.gpuRequested = SeparationEngine::backend() == ComputeBackend::gpu;
         });
 
         return jobHasFinished;
@@ -923,6 +950,11 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
         s.peaksKnown = true;
         s.inferenceSeconds = xml->getDoubleAttribute ("inferenceSeconds");
         s.realtimeFactor = xml->getDoubleAttribute ("realtimeFactor");
+
+        // Reopened entries state what ran without flagging a fallback: the
+        // request that produced them is long gone (issue #27).
+        s.usedGpu = xml->getStringAttribute ("backend") == "gpu";
+        s.gpuRequested = s.usedGpu;
         s.bpm = xml->getDoubleAttribute ("bpm");
         s.key = xml->getStringAttribute ("key");
     });
@@ -1010,6 +1042,11 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
         s.peaksKnown = true;
         s.inferenceSeconds = xml->getDoubleAttribute ("inferenceSeconds");
         s.realtimeFactor = xml->getDoubleAttribute ("realtimeFactor");
+
+        // Reopened entries state what ran without flagging a fallback: the
+        // request that produced them is long gone (issue #27).
+        s.usedGpu = xml->getStringAttribute ("backend") == "gpu";
+        s.gpuRequested = s.usedGpu;
         s.bpm = xml->getDoubleAttribute ("bpm");
         s.key = xml->getStringAttribute ("key");
     });
