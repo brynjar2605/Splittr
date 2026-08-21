@@ -254,6 +254,7 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
                                                    ComputeBackend backend)
 {
     const bool useGpu = backend == ComputeBackend::gpu && gpuAvailable();
+    bool allOnGpu = useGpu; // falsified by any pass that takes the CPU path
     jassert (stereo44k.getNumChannels() == 2);
     jassert (modelFiles.size() == 1 || modelFiles.size() == 4);
 
@@ -360,6 +361,8 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
             if (! ranOnGpu)
                 modelOut = chunkedInference (model, audio, chooseNumChunks (numSamples), scopedCallback);
 
+            allOnGpu = allOnGpu && ranOnGpu;
+
             if (numModels == 1)
             {
                 targets = std::move (modelOut);
@@ -394,6 +397,7 @@ DemucsSeparator::Status DemucsSeparator::separate (const std::vector<juce::File>
     const auto numStems = (int) order.size();
 
     out.numSources = numSources;
+    out.ranOnGpu = allOnGpu;
     out.kinds = order;
     out.stems.assign ((size_t) numStems, {});
     out.peaksDb.assign ((size_t) numStems, -120.0f);

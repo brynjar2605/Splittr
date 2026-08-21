@@ -346,6 +346,30 @@ int main (int argc, char** argv)
 
     std::cout << "Sources: " << result.numSources << "\n";
 
+    // The plugin's tempo flow, mirrored so it is testable from here: the mix
+    // first, the separated drums when the mix declines (issue #27).
+    {
+        auto analysis = splittr::TrackAnalyzer::analyze (decoded.buffer);
+        auto fromDrums = false;
+
+        if (analysis.bpm <= 0.0)
+        {
+            const auto drums = result.indexOfKind (splittr::stemDrums);
+
+            if (drums >= 0)
+            {
+                analysis.bpm = splittr::TrackAnalyzer::analyze (result.stems[(size_t) drums]).bpm;
+                fromDrums = analysis.bpm > 0.0;
+            }
+        }
+
+        if (analysis.bpm > 0.0)
+            std::cout << "BPM: " << juce::String (analysis.bpm, 1)
+                      << (fromDrums ? " (drums fallback)" : " (mix)") << "\n";
+        else
+            std::cout << "BPM: none\n";
+    }
+
     outDir.createDirectory();
 
     for (size_t i = 0; i < result.stems.size(); ++i)

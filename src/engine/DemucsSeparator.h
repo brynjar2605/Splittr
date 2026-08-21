@@ -22,6 +22,11 @@ struct SeparationResult
 
     int numSources = 0; // 4 or 6: what the model separated
 
+    // True when every model pass ran on the Metal backend; false as soon as
+    // any pass took the CPU path (fallback included), so the caller can tell
+    // the user what actually did the work (issue #27).
+    bool ranOnGpu = false;
+
     // Position of a stem kind within `stems`, or -1 when this run has none.
     int indexOfKind (int kind) const
     {
