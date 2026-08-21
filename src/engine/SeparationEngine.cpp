@@ -135,6 +135,70 @@ namespace
         return wav.getParentDirectory().getChildFile ("tuned").getChildFile (wav.getFileName());
     }
 
+    // --- clean vocal (issue #29) -------------------------------------------
+    // One attribute in the fx tradition, keyed on the canonical name even
+    // though only Vocals ever carries it: "cleanVocals" holds the params the
+    // active render was made with, and its absence means the raw render.
+    juce::String cleanAttribute (const juce::String& stemName) { return "clean" + stemName; }
+
+    // Where a render for these params lives: <entry>/clean/, named by the
+    // params themselves (VocalCleanParams::cacheTag), so identical params can
+    // re-activate without a rerun and a human can read the dir.
+    juce::File cleanFileFor (const juce::File& stemWav, const VocalCleanParams& params)
+    {
+        return stemWav.getParentDirectory().getChildFile ("clean")
+            .getChildFile ("Vocals_" + params.cacheTag() + ".wav");
+    }
+
+    // The file an ACTIVE render is served from: the raw stem's own filename,
+    // one directory down — tuned/-style (issue #11) — refreshed at every
+    // activation from whichever param-keyed cache file won. The cache keeps
+    // several params' renders side by side under their tags; this is the one
+    // the user chose, wearing the name and metadata a stem leaves the plugin
+    // with, so a drag out of clean/ lands in the DAW exactly like a raw one.
+    juce::File cleanExportFileFor (const juce::File& stemWav)
+    {
+        return stemWav.getParentDirectory().getChildFile ("clean")
+            .getChildFile (stemWav.getFileName());
+    }
+
+    // A clean render recorded in the meta comes back active on reopen when its
+    // file survived — the same contract the transcriptions and fx have, and no
+    // meta version bump for the same reason (issue #29).
+    void attachExistingClean (EngineSnapshot& s, const juce::XmlElement& xml)
+    {
+        s.vocalClean = {};
+
+        for (const auto& stem : s.stems)
+        {
+            if (stem.kind != stemVocals)
+                continue;
+
+            const auto params = VocalCleanParams::fromDescriptor (
+                xml.getStringAttribute (cleanAttribute (stem.name)));
+
+            if (params.isNoop())
+                return;
+
+            // The export-named twin is what activation serves; an entry
+            // activated before the twin existed still holds the param-keyed
+            // cache file, which is the same audio under a plainer name.
+            const auto twin = cleanExportFileFor (stem.wav);
+            const auto render = twin.existsAsFile() ? twin
+                                                    : cleanFileFor (stem.wav, params);
+
+            if (render.existsAsFile())
+            {
+                s.vocalClean.state = EngineSnapshot::VocalClean::State::done;
+                s.vocalClean.progress = 1.0f;
+                s.vocalClean.params = params;
+                s.vocalClean.file = render;
+            }
+
+            return;
+        }
+    }
+
     // Rewrite an entry's meta.xml with `values` set on it; an empty value
     // removes its attribute. Parse-and-write rather than regenerate: the meta
     // is written by the job that produced the entry, and tuning must not be
@@ -605,8 +669,10 @@ public:
 
         // A re-render replaces the raw stems, so any shaped bounce beside them
         // is stale by definition — and the meta about to be written carries no
-        // fx attributes to remember it by (issue #9).
+        // fx attributes to remember it by (issue #9). Clean renders were made
+        // from the previous raw vocals, so they go the same way (issue #29).
         entry.dir.getChildFile ("tuned").deleteRecursively();
+        entry.dir.getChildFile ("clean").deleteRecursively();
 
         const auto numStems = (int) result.stems.size();
 
@@ -710,21 +776,28 @@ private:
 class SeparationEngine::MidiJob : public juce::ThreadPoolJob
 {
 public:
-    MidiJob (SeparationEngine& e, int gen, int index, juce::File file, int stemKind, double tempo)
+    // `wav` is the stem's identity — the publish guard and the .mid's home —
+    // while `audioSource` is what actually gets transcribed: the active clean
+    // render when one stands in for the vocals, the stem itself otherwise
+    // (issue #29). The .mid lands beside the raw stem either way, which is
+    // where attachExistingMidi and EXPORT… look for it.
+    MidiJob (SeparationEngine& e, int gen, int index, juce::File file,
+             juce::File audioSource, int stemKind, double tempo)
         : ThreadPoolJob ("midi"), engine (e), generation (gen), stemIndex (index),
-          wav (std::move (file)), kind (stemKind), bpm (tempo) {}
+          wav (std::move (file)), source (std::move (audioSource)),
+          kind (stemKind), bpm (tempo) {}
 
     JobStatus runJob() override
     {
         const auto midi = MidiTranscriber::midiFileFor (wav);
 
-        engine.logEvent ("transcribing " + wav.getFileName());
+        engine.logEvent ("transcribing " + source.getFileName());
 
         MidiTranscription info;
         juce::String error;
 
         const auto status = MidiTranscriber::transcribe (
-            wav, midi, bpm, kind,
+            source, midi, bpm, kind,
             [this] (float p) { publish ([p] (EngineSnapshot::StemInfo& s) { s.midiProgress = p; }); },
             [this] { return ! shouldExit(); },
             info, error);
@@ -788,6 +861,7 @@ private:
     const int generation;
     const int stemIndex;
     const juce::File wav;
+    const juce::File source;
     const int kind;
     const double bpm;
 };
@@ -807,6 +881,11 @@ SeparationEngine::SeparationEngine()
 SeparationEngine::~SeparationEngine()
 {
     generation.fetch_add (1);
+
+    // The cleaner before the pool, and explicitly rather than via its own
+    // destructor: its callbacks hold this engine, so its thread has to be
+    // gone while every member is still whole.
+    cleaner.cancel();
     pool.removeAllJobs (true, 20000);
 }
 
@@ -1025,6 +1104,8 @@ bool SeparationEngine::tryPublishCached (const juce::File& source, int gen, Qual
         s.gpuRequested = s.usedGpu;
         s.bpm = xml->getDoubleAttribute ("bpm");
         s.key = xml->getStringAttribute ("key");
+
+        attachExistingClean (s, *xml);
     });
 
     return true;
@@ -1062,6 +1143,7 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
     const auto numSources = stemNames.size() - 1; // every stem but the instrumental
     const auto gen = generation.fetch_add (1) + 1;
 
+    cleaner.cancel(); // the stem set is being replaced under it
     pool.removeAllJobs (true, 0);
 
     mutate (gen, [&] (EngineSnapshot& s)
@@ -1119,6 +1201,8 @@ bool SeparationEngine::openCachedEntry (const juce::File& cacheDir)
         s.gpuRequested = s.usedGpu;
         s.bpm = xml->getDoubleAttribute ("bpm");
         s.key = xml->getStringAttribute ("key");
+
+        attachExistingClean (s, *xml);
     });
 
     return true;
@@ -1129,6 +1213,7 @@ void SeparationEngine::requestSeparation (const juce::File& file)
     const auto gen = generation.fetch_add (1) + 1;
     const auto quality = models.quality();
 
+    cleaner.cancel(); // the vocals it was cleaning are about to be replaced
     pool.removeAllJobs (true, 0);
 
     if (tryPublishCached (file, gen, quality))
@@ -1146,6 +1231,7 @@ void SeparationEngine::requestSeparation (const juce::File& file)
         snapshot.message.clear();
         snapshot.sourceFile = file;
         snapshot.peaksKnown = false;
+        snapshot.vocalClean = {};
     }
 
     pool.addJob (new SeparationJob (*this, file, gen, quality), true);
@@ -1153,7 +1239,7 @@ void SeparationEngine::requestSeparation (const juce::File& file)
 
 void SeparationEngine::requestMidi (int stemIndex, bool force)
 {
-    juce::File wav;
+    juce::File wav, source;
     auto kind = -1;
     auto bpm = 0.0;
     auto gen = 0;
@@ -1180,6 +1266,17 @@ void SeparationEngine::requestMidi (int stemIndex, bool force)
         stem.midiProgress = 0.0f;
 
         wav = stem.wav;
+
+        // The transcription reads what the user hears: an active clean render
+        // substitutes for the raw vocals here exactly as it does in audition,
+        // drag and export (issue #29). Never the FX bounce, though — MIDI has
+        // always read the un-EQ'd source.
+        source = stem.kind == stemVocals
+                         && snapshot.vocalClean.state == EngineSnapshot::VocalClean::State::done
+                         && snapshot.vocalClean.file.existsAsFile()
+                     ? snapshot.vocalClean.file
+                     : wav;
+
         kind = stem.kind;
         bpm = snapshot.bpm;
         gen = generation.load();
@@ -1188,7 +1285,7 @@ void SeparationEngine::requestMidi (int stemIndex, bool force)
     // Deliberately no generation bump and no removeAllJobs: transcription adds
     // to the session rather than replacing it, so it queues behind whatever is
     // already running and leaves the stems alone.
-    pool.addJob (new MidiJob (*this, gen, stemIndex, wav, kind, bpm), true);
+    pool.addJob (new MidiJob (*this, gen, stemIndex, wav, source, kind, bpm), true);
 }
 
 void SeparationEngine::setStemFx (int stemIndex, const StemFxParams& fx, bool commit)
@@ -1232,13 +1329,14 @@ void SeparationEngine::setStemFx (int stemIndex, const StemFxParams& fx, bool co
         values.set (fxBouncedAttribute (name), {});
     }
 
+    const juce::ScopedLock ml (metaLock);
     writeMetaAttributes (meta, values);
 }
 
 juce::File SeparationEngine::processedStemFile (int stemIndex)
 {
-    juce::File wav;
-    juce::String name;
+    juce::File wav, clean;
+    juce::String name, cleanTag;
     StemFxParams fx;
 
     {
@@ -1252,23 +1350,42 @@ juce::File SeparationEngine::processedStemFile (int stemIndex)
         wav = stem.wav;
         name = stem.name;
         fx = stem.fx;
+
+        // An active clean render is the vocals' source from here on: it is
+        // what leaves the plugin flat, and what the bounce renders from
+        // (issue #29).
+        if (stem.kind == stemVocals
+            && snapshot.vocalClean.state == EngineSnapshot::VocalClean::State::done)
+        {
+            clean = snapshot.vocalClean.file;
+            cleanTag = snapshot.vocalClean.params.cacheTag();
+        }
     }
 
-    if (fx.isFlat() || ! wav.existsAsFile())
-        return wav; // an untuned stem leaves the plugin as the raw render
+    const auto source = clean.existsAsFile() ? clean : wav;
+
+    if (fx.isFlat() || ! source.existsAsFile())
+        return source; // an untuned stem leaves the plugin as its source render
 
     const auto meta = wav.getParentDirectory().getChildFile ("meta.xml");
     const auto tuned = tunedFileFor (wav);
-    const auto descriptor = fx.toDescriptor();
 
-    // The bounce is only good for the params it was rendered from; anything
-    // else — including a tuned/ file left over from a run this meta forgot —
-    // is rendered again.
+    // The staleness key carries the source's identity beside the fx: a bounce
+    // is only good for the params it was rendered from AND the file it was
+    // rendered from, so activating or reverting a clean render invalidates it
+    // exactly like a moved slider (issue #29). The value is opaque — compared
+    // here, never parsed — so widening it costs old entries nothing.
+    const auto bounceKey = clean.existsAsFile()
+                               ? fx.toDescriptor() + "|src:clean-" + cleanTag
+                               : fx.toDescriptor();
+
+    // Anything else — including a tuned/ file left over from a run this meta
+    // forgot — is rendered again.
     if (tuned.existsAsFile())
     {
         const auto xml = juce::parseXML (meta);
 
-        if (xml != nullptr && xml->getStringAttribute (fxBouncedAttribute (name)) == descriptor)
+        if (xml != nullptr && xml->getStringAttribute (fxBouncedAttribute (name)) == bounceKey)
             return tuned;
     }
 
@@ -1277,19 +1394,364 @@ juce::File SeparationEngine::processedStemFile (int stemIndex)
     // synchronous bounce has no race with the job that owns the entry. A
     // 4-minute stereo stem is well under a second, so the first drag after a
     // tweak pays a beat and every later one is instant.
-    logEvent ("bouncing tuned " + wav.getFileName());
+    logEvent ("bouncing tuned " + source.getFileName());
 
-    if (! bounceStem (wav, tuned, fx))
+    if (! bounceStem (source, tuned, fx))
     {
-        logEvent ("bounce failed, handing over the raw stem");
-        return wav; // nothing shaped to hand over: better the raw stem than none
+        logEvent ("bounce failed, handing over the unshaped stem");
+        return source; // nothing shaped to hand over: better the source than none
     }
 
     juce::StringPairArray values;
-    values.set (fxBouncedAttribute (name), descriptor);
-    writeMetaAttributes (meta, values);
+    values.set (fxBouncedAttribute (name), bounceKey);
+
+    {
+        const juce::ScopedLock ml (metaLock);
+        writeMetaAttributes (meta, values);
+    }
 
     return tuned;
+}
+
+void SeparationEngine::activateVocalClean (int gen, const juce::String& stemName,
+                                           const juce::File& stemWav,
+                                           const VocalCleanParams& params,
+                                           const juce::File& render,
+                                           const juce::String& songName,
+                                           double bpm, const juce::String& key)
+{
+    // What leaves the plugin must carry the export name and the LIST/INFO the
+    // raw stems embed (issue #11), and the cache file is deliberately named
+    // for its params instead — so activation rewrites the export twin from
+    // it. Rewritten every time rather than tracked: the twin keeps one name
+    // across activations of different params, and a fresh copy is the one
+    // staleness rule that cannot be wrong. Written beside itself and moved
+    // into place so a reader mid-file never sees a half twin; a rewrite under
+    // an open audition is safe the same way — the old inode plays on until
+    // the editor notices the activation and reloads.
+    auto active = render;
+
+    {
+        const auto twin = cleanExportFileFor (stemWav);
+        const auto part = twin.getSiblingFile (twin.getFileName() + ".part");
+
+        DecodedAudio audio;
+        juce::String error;
+
+        auto written = io.decodeToStereo44k (render, audio, error)
+                       && io.writeWavFloat32 (part, audio.buffer,
+                                              AudioFileIO::kTargetSampleRate, error,
+                                              stemMetadata (songName, stemName, bpm, key));
+
+        if (written)
+        {
+            twin.deleteFile();
+            written = part.moveFileTo (twin);
+        }
+
+        if (written)
+        {
+            active = twin;
+        }
+        else
+        {
+            // The render is still right, just plainly named: serve it rather
+            // than fail an activation over its naming.
+            part.deleteFile();
+            logEvent ("clean vocal: could not write the export twin, serving "
+                      + render.getFileName());
+        }
+    }
+
+    // The choice survives reopen the way the fx do: one attribute on the
+    // entry's meta, removed again by revert.
+    juce::StringPairArray values;
+    values.set (cleanAttribute (stemName), params.toDescriptor());
+
+    {
+        const juce::ScopedLock ml (metaLock);
+        writeMetaAttributes (stemWav.getParentDirectory().getChildFile ("meta.xml"), values);
+    }
+
+    mutate (gen, [&params, &active] (EngineSnapshot& s)
+    {
+        s.vocalClean = {};
+        s.vocalClean.state = EngineSnapshot::VocalClean::State::done;
+        s.vocalClean.progress = 1.0f;
+        s.vocalClean.params = params;
+        s.vocalClean.file = active;
+    });
+}
+
+void SeparationEngine::requestVocalClean (const VocalCleanParams& params)
+{
+    using CleanState = EngineSnapshot::VocalClean::State;
+
+    if (params.isNoop())
+        return;
+
+    juce::File wav;
+    juce::String name, songName, key;
+    auto bpm = 0.0;
+    EngineSnapshot::VocalClean previous;
+    auto gen = 0;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        if (snapshot.phase != Phase::Ready
+            || snapshot.vocalClean.state == CleanState::running)
+            return;
+
+        // Asking for what is already active is the panel double-firing.
+        if (snapshot.vocalClean.state == CleanState::done
+            && snapshot.vocalClean.params == params)
+            return;
+
+        for (const auto& stem : snapshot.stems)
+        {
+            if (stem.kind == stemVocals)
+            {
+                wav = stem.wav;
+                name = stem.name;
+                break;
+            }
+        }
+
+        if (! wav.existsAsFile())
+            return;
+
+        previous = snapshot.vocalClean;
+
+        // For the export twin's embedded LIST/INFO — the same three values
+        // the raw stems were written with (issue #11).
+        songName = snapshot.sourceFile.getFileNameWithoutExtension();
+        bpm = snapshot.bpm;
+        key = snapshot.key;
+
+        gen = generation.load();
+    }
+
+    if (! VocalCleaner::isSetUp())
+    {
+        logEvent ("clean vocal: sidecar not set up");
+
+        mutate (gen, [] (EngineSnapshot& s)
+        {
+            s.vocalClean = {};
+            s.vocalClean.state = CleanState::notSetUp;
+        });
+
+        return;
+    }
+
+    const auto target = cleanFileFor (wav, params);
+
+    // Identical params with the render still on disk: activating costs one
+    // export-twin rewrite instead of a rerun — reproducing a minutes-long
+    // chain for a file we already have would be rude.
+    if (target.existsAsFile())
+    {
+        logEvent ("clean cache hit: " + target.getFileName());
+        activateVocalClean (gen, name, wav, params, target, songName, bpm, key);
+        return;
+    }
+
+    // A finished thread can still be winding down behind a done or failed
+    // state; clear it out so start() below cannot refuse a legitimate request.
+    cleaner.cancel();
+
+    mutate (gen, [&params] (EngineSnapshot& s)
+    {
+        s.vocalClean = {};
+        s.vocalClean.state = CleanState::running;
+        s.vocalClean.params = params;
+    });
+
+    logEvent ("clean vocal requested: " + params.toDescriptor());
+
+    // The sidecar writes a sibling and the engine moves it into place once
+    // the run succeeds, so a dead child can never leave a half render where
+    // the cache check above looks. Same extension on the sibling: the python
+    // side keys the output format on it.
+    const auto part = target.getSiblingFile ("part_" + target.getFileName());
+
+    VocalCleaner::Callbacks cb;
+
+    cb.onStage = [this, gen] (const juce::String& stage, int index, int count)
+    {
+        logEvent ("clean stage " + juce::String (index) + "/" + juce::String (count)
+                  + ": " + stage);
+        mutate (gen, [&stage] (EngineSnapshot& s) { s.vocalClean.stage = stage; });
+    };
+
+    cb.onProgress = [this, gen] (float p)
+    {
+        mutate (gen, [p] (EngineSnapshot& s) { s.vocalClean.progress = p; });
+    };
+
+    cb.onFinished = [this, gen, wav, name, params, part, target, previous,
+                     songName, bpm, key]
+                    (VocalCleaner::Result result, juce::String message)
+    {
+        // The worker's own last cancel check races the finish: a cancel — or
+        // an entry switch, which bumps the generation before it cancels —
+        // can land exactly as the child exits, and an ok that slipped
+        // through must not push a render or a meta attribute into a session
+        // that asked for neither. Re-checked here, before any disk effect,
+        // which closes both windows; the UI mutate below stays generation-
+        // gated as everywhere else.
+        if (result == VocalCleaner::Result::ok
+            && (cleaner.cancelRequested() || gen != generation.load()))
+            result = VocalCleaner::Result::cancelled;
+
+        // A failure must not orphan the meta: the previous render's
+        // attribute is still recorded there, so the session keeps that
+        // render active too, with the reason alongside for the panel. Only
+        // when nothing was active does the state land on failed proper.
+        const auto failWith = [this, gen, &previous] (const juce::String& why)
+        {
+            mutate (gen, [&previous, &why] (EngineSnapshot& s)
+            {
+                if (previous.state == CleanState::done && previous.file.existsAsFile())
+                {
+                    s.vocalClean = previous;
+                    s.vocalClean.error = why;
+                }
+                else
+                {
+                    s.vocalClean = {};
+                    s.vocalClean.state = CleanState::failed;
+                    s.vocalClean.error = why;
+                }
+            });
+        };
+
+        switch (result)
+        {
+            case VocalCleaner::Result::ok:
+                target.deleteFile();
+
+                if (! part.moveFileTo (target))
+                {
+                    part.deleteFile();
+                    logEvent ("clean vocal failed: could not move the render into place");
+                    failWith ("COULD NOT WRITE THE RENDER");
+                    return;
+                }
+
+                logEvent ("clean vocal done: " + target.getFileName());
+                activateVocalClean (gen, name, wav, params, target, songName, bpm, key);
+                return;
+
+            case VocalCleaner::Result::cancelled:
+                part.deleteFile();
+                logEvent ("clean vocal cancelled");
+
+                // A cancel is "never mind", not "revert": whatever render was
+                // active before the run comes back.
+                mutate (gen, [&previous] (EngineSnapshot& s)
+                {
+                    s.vocalClean = previous.state == CleanState::done
+                                           && previous.file.existsAsFile()
+                                       ? previous
+                                       : EngineSnapshot::VocalClean {};
+                });
+
+                return;
+
+            case VocalCleaner::Result::notSetUp:
+                logEvent ("clean vocal: sidecar not set up");
+
+                mutate (gen, [] (EngineSnapshot& s)
+                {
+                    s.vocalClean = {};
+                    s.vocalClean.state = CleanState::notSetUp;
+                });
+
+                return;
+
+            case VocalCleaner::Result::failed:
+                part.deleteFile();
+                logEvent ("clean vocal failed: " + message);
+                failWith (message);
+                return;
+        }
+    };
+
+    if (! cleaner.start (wav, part, params, std::move (cb)))
+    {
+        // Unreachable after the cancel above, in principle; back off honestly
+        // rather than leave a running state nothing is behind.
+        mutate (gen, [] (EngineSnapshot& s) { s.vocalClean = {}; });
+    }
+}
+
+void SeparationEngine::cancelVocalClean()
+{
+    if (! cleaner.isBusy())
+        return;
+
+    logEvent ("clean vocal: cancel requested");
+
+    // Blocks only briefly: the kill drops the pipe at once, and onFinished's
+    // cancelled path has restored the previous state by the time this returns.
+    cleaner.cancel();
+}
+
+void SeparationEngine::revertVocalClean()
+{
+    using CleanState = EngineSnapshot::VocalClean::State;
+
+    juce::File meta;
+    juce::String name;
+
+    {
+        const juce::ScopedLock sl (lock);
+
+        switch (snapshot.vocalClean.state)
+        {
+            case CleanState::none:
+            case CleanState::running: // that is cancelVocalClean's job
+                return;
+
+            // Revert doubles as the panel's dismiss: nothing on disk to undo.
+            case CleanState::notSetUp:
+            case CleanState::failed:
+                snapshot.vocalClean = {};
+                return;
+
+            case CleanState::done:
+                break;
+        }
+
+        for (const auto& stem : snapshot.stems)
+        {
+            if (stem.kind == stemVocals)
+            {
+                meta = stem.wav.getParentDirectory().getChildFile ("meta.xml");
+                name = stem.name;
+                break;
+            }
+        }
+
+        snapshot.vocalClean = {};
+    }
+
+    logEvent ("clean vocal reverted");
+
+    // The attribute goes; the render itself stays in clean/, so re-activating
+    // the same params later costs nothing.
+    juce::StringPairArray values;
+    values.set (cleanAttribute (name), {});
+
+    const juce::ScopedLock ml (metaLock);
+    writeMetaAttributes (meta, values);
+}
+
+bool SeparationEngine::vocalCleanSetUp()
+{
+    return VocalCleaner::isSetUp();
 }
 
 void SeparationEngine::requestCancel()
@@ -1315,6 +1777,7 @@ void SeparationEngine::requestCancel()
 void SeparationEngine::requestNewFile()
 {
     generation.fetch_add (1);
+    cleaner.cancel();
     pool.removeAllJobs (true, 0);
 
     const juce::ScopedLock sl (lock);

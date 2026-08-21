@@ -3,6 +3,8 @@
 //   splittr_cli <audio-in> <model.bin> <out-dir>
 //   splittr_cli --analyze <audio-in> [<audio-in> ...]
 //   splittr_cli --midi <stem.wav> <out.mid> [bpm]
+//   splittr_cli --clean <in.wav> <out.wav> [--dereverb] [--dereverb-echo]
+//               [--restore none|apollo|audiosr]
 //
 // Separation mode writes every stem the model produces (32-bit float, 44.1 kHz)
 // to out-dir: five files for a 4-source model, seven for htdemucs_6s (guitar
@@ -10,13 +12,17 @@
 // validation harness for TrackAnalyzer. MIDI mode transcribes one stem and
 // then reads the written file back with juce::MidiFile, so what it reports is
 // what a DAW would see rather than what the transcriber thinks it wrote.
+// Clean mode drives VocalCleaner end-to-end and mirrors the sidecar protocol
+// to stdout, so the whole issue #29 seam is testable without a DAW.
 
 #include "engine/AudioFileIO.h"
 #include "engine/ComputeBackend.h"
 #include "engine/DemucsSeparator.h"
 #include "engine/MidiTranscriber.h"
 #include "engine/TrackAnalyzer.h"
+#include "engine/VocalCleaner.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -208,6 +214,81 @@ namespace
         return summariseMidiFile (outMidi, info.bpm);
     }
 
+    // The plugin's clean-vocal seam (issue #29), driven synchronously: start
+    // the cleaner, mirror the protocol lines it parses back onto our own
+    // stdout, and let the exit code say how it went.
+    int cleanVocal (const juce::File& input, const juce::File& output,
+                    const splittr::VocalCleanParams& params)
+    {
+        if (! input.existsAsFile())
+        {
+            std::cerr << "Input file not found: " << input.getFullPathName() << "\n";
+            return 1;
+        }
+
+        if (params.isNoop())
+        {
+            std::cerr << "Nothing to do: pass --dereverb, --dereverb-echo and/or --restore\n";
+            return 1;
+        }
+
+        splittr::VocalCleaner::Callbacks cb;
+
+        cb.onStage = [] (const juce::String& stage, int index, int count)
+        {
+            std::cout << "STAGE " << stage << " " << index << " " << count << "\n" << std::flush;
+        };
+
+        cb.onProgress = [] (float p)
+        {
+            std::cout << "PROGRESS " << (int) std::lround (p * 100.0f) << "\n" << std::flush;
+        };
+
+        // Written on the cleaner's thread, read after waitForJob(): the join
+        // is the fence.
+        auto result = splittr::VocalCleaner::Result::failed;
+        juce::String message;
+
+        cb.onFinished = [&result, &message] (splittr::VocalCleaner::Result r, juce::String m)
+        {
+            result = r;
+            message = std::move (m);
+        };
+
+        splittr::VocalCleaner cleaner;
+
+        if (! cleaner.start (input, output, params, std::move (cb)))
+        {
+            std::cerr << "Could not start the cleaner\n";
+            return 1;
+        }
+
+        cleaner.waitForJob();
+
+        switch (result)
+        {
+            case splittr::VocalCleaner::Result::ok:
+                std::cout << "DONE " << message << "\n";
+                return 0;
+
+            case splittr::VocalCleaner::Result::notSetUp:
+                std::cerr << "clean-vocal runtime not set up at "
+                          << splittr::VocalCleaner::root().getFullPathName()
+                          << " — run tools/cleanvocal/setup.sh\n";
+                return 1;
+
+            case splittr::VocalCleaner::Result::cancelled:
+                std::cerr << "cancelled\n";
+                return 1;
+
+            case splittr::VocalCleaner::Result::failed:
+                break;
+        }
+
+        std::cout << "ERROR " << message << "\n";
+        return 1;
+    }
+
     int analyzeFiles (int numFiles, char** paths)
     {
         splittr::AudioFileIO io;
@@ -256,11 +337,56 @@ int main (int argc, char** argv)
                                argc > 4 ? juce::String (argv[4]).getDoubleValue() : 0.0);
     }
 
+    if (argc >= 4 && juce::String (argv[1]) == "--clean")
+    {
+        const auto cwd = juce::File::getCurrentWorkingDirectory();
+
+        splittr::VocalCleanParams params;
+
+        for (int i = 4; i < argc; ++i)
+        {
+            const juce::String arg (argv[i]);
+
+            if (arg == "--dereverb")
+            {
+                params.dereverb = true;
+            }
+            else if (arg == "--dereverb-echo")
+            {
+                params.dereverbEcho = true;
+            }
+            else if (arg == "--restore" && i + 1 < argc)
+            {
+                const juce::String mode (argv[++i]);
+
+                if (mode == "apollo")
+                    params.restore = splittr::VocalRestoreMode::apollo;
+                else if (mode == "audiosr")
+                    params.restore = splittr::VocalRestoreMode::audiosr;
+                else if (mode != "none")
+                {
+                    std::cerr << "Unknown restore mode: " << mode
+                              << " (none|apollo|audiosr)\n";
+                    return 1;
+                }
+            }
+            else
+            {
+                std::cerr << "Unknown option: " << arg << "\n";
+                return 1;
+            }
+        }
+
+        return cleanVocal (cwd.getChildFile (argv[2]), cwd.getChildFile (argv[3]), params);
+    }
+
     if (argc != 4)
     {
         std::cerr << "Usage: splittr_cli <audio-in> <model.bin> <out-dir>\n"
                   << "       splittr_cli --analyze <audio-in> [<audio-in> ...]\n"
-                  << "       splittr_cli --midi <stem.wav> <out.mid> [bpm]\n";
+                  << "       splittr_cli --midi <stem.wav> <out.mid> [bpm]\n"
+                  << "       splittr_cli --clean <in.wav> <out.wav> [--dereverb]"
+                     " [--dereverb-echo] [--restore none|apollo|audiosr]\n";
         return 1;
     }
 

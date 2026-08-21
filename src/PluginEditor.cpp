@@ -6,6 +6,17 @@
 
 using namespace splittr;
 
+// The clean-render swap detector's identity: path plus params, because the
+// export-named file keeps the same name whichever params produced it — a
+// re-activation rewrites it in place, and the audition must reload on that
+// even though the path never moved (issue #29).
+static juce::String cleanKeyFor (const splittr::EngineSnapshot::VocalClean& clean)
+{
+    return clean.state == splittr::EngineSnapshot::VocalClean::State::done
+               ? clean.file.getFullPathName() + "|" + clean.params.toDescriptor()
+               : juce::String();
+}
+
 SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor& p)
     : AudioProcessorEditor (&p), splittrProcessor (p)
 {
@@ -19,6 +30,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     content.addChildComponent (doneView);
     content.addChildComponent (confirmView);
     content.addChildComponent (tuneView);     // over the done view it shapes
+    content.addChildComponent (cleanPanel);   // ditto (issue #29)
     content.addChildComponent (libraryView);
     content.addChildComponent (settingsView); // added last: sits on top
     content.addChildComponent (diagView);     // above even settings: opened from it
@@ -34,6 +46,7 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
         doneView.setBounds (bounds);
         confirmView.setBounds (bounds);
         tuneView.setBounds (bounds);
+        cleanPanel.setBounds (bounds);
         libraryView.setBounds (bounds);
         settingsView.setBounds (bounds);
         diagView.setBounds (bounds);
@@ -41,6 +54,11 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
 
     auto& engine = splittrProcessor.getEngine();
     auto& audition = splittrProcessor.getAudition();
+
+    // A reopened editor joins the session as it stands: without this seed the
+    // first timer tick would read an already-active render as "just changed"
+    // and stop a playing transport for a reload it does not need (issue #29).
+    activeCleanKey = cleanKeyFor (engine.getSnapshot().vocalClean);
 
     idleView.onBrowse = [this] { browseForAudioFile(); };
     idleView.onQualityChange = [&engine] (splittr::Quality q) { engine.setQuality (q); };
@@ -175,6 +193,22 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
     };
 
     tuneView.onClose = [this] { showTune = false; };
+
+    // --- clean vocal (issue #29) ---
+    doneView.onClean = [this, &engine] (int)
+    {
+        cleanPanel.show (engine.getSnapshot().vocalClean,
+                         splittr::SeparationEngine::vocalCleanSetUp());
+        showClean = true;
+    };
+
+    cleanPanel.onRun = [&engine] (const splittr::VocalCleanParams& params)
+    {
+        engine.requestVocalClean (params);
+    };
+    cleanPanel.onCancel = [&engine] { engine.cancelVocalClean(); };
+    cleanPanel.onRevert = [&engine] { engine.revertVocalClean(); };
+    cleanPanel.onClose = [this] { showClean = false; };
 
     // The live spectrum behind the EQ curve (issue #25): the panel pulls the
     // tapped stem's pre/post frames each repaint; the timer below points the
@@ -445,7 +479,17 @@ splittr::AuditionPlayer::StemFiles SplittrAudioProcessorEditor::stemFiles() cons
     splittr::AuditionPlayer::StemFiles files;
 
     for (const auto& stem : snap.stems)
-        files.push_back (stem.wav);
+    {
+        // An active clean render IS the vocals as far as listening goes
+        // (issue #29); the mute defaults key on stem.wav and stay untouched.
+        const auto clean =
+            stem.kind == splittr::stemVocals
+                    && snap.vocalClean.state == splittr::EngineSnapshot::VocalClean::State::done
+                ? snap.vocalClean.file
+                : juce::File();
+
+        files.push_back (clean.existsAsFile() ? clean : stem.wav);
+    }
 
     return files;
 }
@@ -559,6 +603,32 @@ static bool applyUiPreview (splittr::EngineSnapshot& s, double clock)
     return true;
 }
 
+// The CLEAN chip is vocals-only by design (issue #29); every other row hides
+// it, and the failed / not-set-up states read as idle — the panel is where
+// those get their words.
+static splittr::StemRowComponent::CleanChip cleanChipFor (
+    const splittr::EngineSnapshot::StemInfo& stem,
+    const splittr::EngineSnapshot::VocalClean& clean)
+{
+    using Chip = splittr::StemRowComponent::CleanChip;
+    using State = splittr::EngineSnapshot::VocalClean::State;
+
+    if (stem.kind != splittr::stemVocals)
+        return Chip::hidden;
+
+    switch (clean.state)
+    {
+        case State::running: return Chip::busy;
+        case State::done:    return Chip::active;
+
+        case State::none:
+        case State::notSetUp:
+        case State::failed:  break;
+    }
+
+    return Chip::idle;
+}
+
 // The engine's tri-state plus "is this a stem Basic Pitch handles at all",
 // which is what decides whether the row shows a chip in the first place.
 static splittr::StemRowComponent::MidiChip midiChipFor (const splittr::EngineSnapshot::StemInfo& stem)
@@ -627,9 +697,13 @@ void SplittrAudioProcessorEditor::timerCallback()
     const bool showDone = snap.phase == Phase::Ready;
     const bool showIdle = ! showDownload && ! showWorking && ! showDone;
 
-    // The tune overlay belongs to the done state: leaving it closes the panel.
+    // The tune and clean overlays belong to the done state: leaving it closes
+    // them.
     if (! showDone)
+    {
         showTune = false;
+        showClean = false;
+    }
 
     idleView.setVisible (showIdle);
     downloadView.setVisible (showDownload);
@@ -637,6 +711,7 @@ void SplittrAudioProcessorEditor::timerCallback()
     doneView.setVisible (showDone);
     confirmView.setVisible (confirming);
     tuneView.setVisible (showTune);
+    cleanPanel.setVisible (showClean);
 
     // One authoritative line rather than calls sprinkled over every open and
     // close path: whatever hid or showed the panel this tick, the spectrum tap
@@ -681,6 +756,38 @@ void SplittrAudioProcessorEditor::timerCallback()
             pos = snap.progress * len;
         }
 
+        // The audition follows the active clean render the moment it lands or
+        // reverts: same stem set, the vocals slot swapped, the transport put
+        // back where it was — playing or paused (issue #29).
+        {
+            const auto cleanNow = cleanKeyFor (snap.vocalClean);
+
+            if (cleanNow != activeCleanKey)
+            {
+                activeCleanKey = cleanNow;
+
+                if (audition.isLoaded())
+                {
+                    const auto fraction = len > 0.0 ? pos / len : 0.0;
+                    const auto wasPlaying = playing;
+
+                    audition.stop();
+
+                    // A paused transport keeps its place too: the swapped set
+                    // loads without starting, and the seek puts it back.
+                    if (wasPlaying)
+                        audition.play (stemFiles());
+                    else
+                        audition.loadPaused (stemFiles());
+
+                    audition.seekFraction (fraction);
+                }
+            }
+        }
+
+        if (showClean)
+            cleanPanel.update (snap.vocalClean, splittr::SeparationEngine::vocalCleanSetUp());
+
         doneView.update (snap, playing); // rebuilds the rows when the stem set changes
 
         // A fresh stem set starts with VOCALS + INSTRUMENTAL audible and the
@@ -713,6 +820,8 @@ void SplittrAudioProcessorEditor::timerCallback()
                                      muted, playing, pos, len, animationClock);
 
             doneView.row (i).setMidi (midiChipFor (stem), stem.midi, stem.midiProgress);
+            doneView.row (i).setClean (cleanChipFor (stem, snap.vocalClean),
+                                       snap.vocalClean.progress);
             doneView.row (i).setFx (! stem.fx.isFlat());
 
             // Keeps the audition chain in step with the snapshot — a reopened
