@@ -522,10 +522,23 @@ namespace
 
         auto bestBpm = 0.0, bestScore = 0.0, bestF = 0.0, runnerUp = 0.0;
 
+        // A margin rival is a candidate on a genuinely DIFFERENT grid. Pure
+        // octave relatives (2x, 1/2x) are the same pulse read at another
+        // level — that choice is the F-measure's and alternation's to make,
+        // and being torn between levels says nothing about whether the grid
+        // itself is trustworthy. 3:2 and 4:3 relatives stay rivals: those
+        // grids clash, and a track torn between them deserves its low margin.
+        const auto rivalOf = [] (double bpm, double best)
+        {
+            const auto r = std::abs (std::log2 (bpm / best));
+            return r > 0.08 && std::abs (r - 1.0) > 0.08;
+        };
+
         for (auto bpm : candidates)
         {
             const auto fit = pulseFit (env, prefixSum, lagFor (bpm));
             const auto comb = combScore (acf, lagFor (bpm)) / peakComb;
+
 
             // Comb support gates the candidate, the F-measure and the
             // alternation penalty decide the octave (this is the half/double
@@ -540,14 +553,14 @@ namespace
             {
                 // Only count an unrelated candidate as the runner-up, so a
                 // near-duplicate peak does not deflate the confidence.
-                if (bestBpm > 0.0 && std::abs (std::log2 (bpm / bestBpm)) > 0.08)
+                if (bestBpm > 0.0 && rivalOf (bpm, bestBpm))
                     runnerUp = juce::jmax (runnerUp, bestScore);
 
                 bestScore = score;
                 bestBpm = bpm;
                 bestF = fit.fMeasure;
             }
-            else if (bestBpm > 0.0 && std::abs (std::log2 (bpm / bestBpm)) > 0.08)
+            else if (bestBpm > 0.0 && rivalOf (bpm, bestBpm))
             {
                 runnerUp = juce::jmax (runnerUp, score);
             }
@@ -584,7 +597,7 @@ namespace
 
         // Confidence: how strongly the winning lag stands out from the rest of
         // the autocorrelation, how cleanly a pulse train fits, and how far
-        // ahead of the best unrelated candidate it is.
+        // ahead of the best rival-grid candidate it is.
         const auto lagRange = (int) std::ceil (lagFor (kMinBpm));
         auto acfMean = 0.0;
         auto acfPeak = 0.0;
@@ -600,13 +613,22 @@ namespace
         const auto prominence = juce::jlimit (0.0, 1.0, (acfPeak - acfMean) / 0.22);
         const auto margin = bestScore > 0.0 ? juce::jlimit (0.0, 1.0, 1.0 - runnerUp / bestScore) : 0.0;
         const auto agreement = tempoAgreement (env, bestBpm);
+        // F is softened the same way comb is in the candidate score: its job
+        // is to pick the metrical level, not to gate detection. Syncopated
+        // material (rap especially) puts onset energy off the quarter grid on
+        // purpose, so even the true tempo's absolute recall sits low there —
+        // and when prominence and whole-track agreement are strong, that must
+        // not read as "no pulse" (issue #26: two rap tracks with perfect
+        // agreement declined at F ~0.43, leaving stems unlabeled and Ableton
+        // free to mis-warp them).
         const auto confidence = juce::jlimit (0.0, 1.0,
                                               std::sqrt (prominence)
-                                                  * bestF
+                                                  * (0.35 + 0.65 * bestF)
                                                   * (0.3 + 0.7 * agreement)
                                                   * (0.55 + 0.45 * margin));
 
         confidenceOut = confidence;
+
 
         if (confidence < kMinConfidence)
             return 0.0;
