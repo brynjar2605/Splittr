@@ -22,6 +22,13 @@ A separated stem can also leave as **MIDI**: Spotify's **Basic Pitch** runs
 in-process on the pitched stems, and the resulting `.mid` drags onto a track
 the same way the audio does.
 
+The vocal stem has one more, experimental, trick: **CLEAN VOCAL** runs it
+through a chain of open restoration models — de-reverb, de-echo, and a
+restoration pass (**Apollo**, or **AudioSR**, a diffusion model) that
+regenerates the frequencies separation lost — for a dry vocal that no longer
+carries the mix's room. Opt-in, non-destructive, offline like everything
+else; see the setup section below.
+
 ## Building
 
 Requirements: macOS 11+, Xcode command line tools, CMake ≥ 3.24.
@@ -61,6 +68,31 @@ you're offline, download the file yourself from
 [huggingface.co/datasets/Retrobear/demucs.cpp](https://huggingface.co/datasets/Retrobear/demucs.cpp)
 and use **LOCATE FILE MANUALLY…** in the plugin.
 
+## Clean vocal (experimental)
+
+The CLEAN chip needs a one-time local runtime the plugin does not ship: two
+Python environments and the model checkpoints, several GB in total, installed
+by
+
+```sh
+tools/cleanvocal/setup.sh
+```
+
+into `~/Library/Application Support/Splittr/cleanvocal/` (requires Homebrew
+`python3.11`; idempotent, so rerunning after an interruption resumes). Until
+it has run, the panel says so and points here. The models are fetched from
+their authors' releases at setup time — community-trained checkpoints whose
+licenses vary, which is one reason this stays a local, experimental sidecar
+rather than something the plugin bundles. Details in
+`tools/cleanvocal/README.md`.
+
+The CLI exercises the same chain without a DAW:
+
+```sh
+build/splittr_cli_artefacts/Release/splittr_cli --clean <stem.wav> <out.wav> \
+    [--dereverb] [--dereverb-echo] [--restore none|apollo|audiosr]
+```
+
 ## Usage notes
 
 - **ENGINE switch** (idle screen): **FAST** uses plain htdemucs (~realtime);
@@ -92,6 +124,16 @@ and use **LOCATE FILE MANUALLY…** in the plugin.
   seconds (a 2½-minute stem, about 2). Transcriptions live beside their stems
   in the cache, so reopening a session finds them already done;
   cmd-click a finished chip to run it again.
+- **CLEAN chip** (done screen, on the Vocals row beside MIDI — experimental):
+  opens a panel with two independent stage toggles — **DE-REVERB** (MelBand
+  RoFormer by anvuew) and **DE-REVERB + ECHO** (Sucial v2, better on delay
+  throws) — and a restoration selector: **NONE**, **APOLLO** (single-pass
+  music restoration, seconds), or **AUDIOSR** (latent diffusion, minutes —
+  the panel is honest about it). RUN renders the chain offline; while a
+  render is active it *is* the vocal — audition, drag, export, TUNE's bounce
+  and MIDI all serve it, under the stem's normal export name — and REVERT
+  returns to the raw render, which is never touched. Each toggle combination
+  caches separately and the choice survives reopening the session.
 - **TUNE** (done screen, the mix icon on a stem row's left edge) opens the
   stem's shaping panel: an interactive parametric EQ — up to 24 bands of any
   shape (bells, shelves, cuts to 96 dB/oct, notch, band-pass, tilts,
