@@ -71,13 +71,6 @@ void DoneView::update (const EngineSnapshot& s, bool isPlaying)
 
     rebuildRows (s.stems);
 
-    // Rebuilt every poll rather than with the rows: reopening a library entry
-    // can keep the same stem names while pointing at different files.
-    stemPaths.clear();
-
-    for (const auto& stem : s.stems)
-        stemPaths.add (stem.wav.getFullPathName());
-
     playing = isPlaying;
     statsText.clear();
 
@@ -230,17 +223,14 @@ void DoneView::mouseDrag (const juce::MouseEvent& e)
 
     // Asked at the moment the drag starts, not when the snapshot arrived: the
     // editor resolves the processed version of every shaped stem here (issue
-    // #9), which may mean bouncing them. The raw renders are the fallback.
-    auto payload = resolveAllFiles != nullptr ? resolveAllFiles() : juce::StringArray();
-
-    if (payload.isEmpty())
-        payload = stemPaths;
-
+    // #9), which may mean bouncing them — and it already falls back to the
+    // raw render per stem, so there is nothing further to fall back to here.
     juce::StringArray files;
 
-    for (const auto& path : payload)
-        if (juce::File (path).existsAsFile())
-            files.add (path);
+    if (resolveAllFiles != nullptr)
+        for (const auto& path : resolveAllFiles())
+            if (juce::File (path).existsAsFile())
+                files.add (path);
 
     if (files.isEmpty())
         return;

@@ -81,10 +81,15 @@ private:
     bool showClean = false; // ditto (issue #29)
     bool showDiag = false; // sits above settings, which stays open behind it
 
-    // The clean render the audition currently plays instead of the raw
-    // vocals; empty when it plays the raw stem. Tracked so the transport can
-    // be reloaded the moment a render activates or reverts (issue #29).
-    juce::File activeCleanFile;
+    // Identity of the clean render the audition currently plays instead of
+    // the raw vocals; empty when it plays the raw stem. File plus params,
+    // because the export-named render keeps one filename across different
+    // params' activations — a re-activation rewrites it in place, and the
+    // audition must reload even though the path never moved. Seeded from the
+    // engine at construction so reopening the editor mid-session does not
+    // read an already-active render as "just changed" and reload a transport
+    // that is already right (issue #29).
+    juce::String activeCleanKey;
 
     // The stem set the mute defaults were last applied to (vocals +
     // instrumental audible, sources muted): re-applied only when the set

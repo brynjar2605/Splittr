@@ -48,6 +48,13 @@ public:
     void play (const StemFiles&);       // load if needed, then run the transport
     void togglePlay (const StemFiles&); // pause if running, else play()
     void stop();                        // stop and unload
+
+    // Load a stem set without starting the transport. The clean-vocal swap
+    // (issue #29) replaces the vocals slot under a paused session, and
+    // pausing must not cost the listener their place: the editor reloads
+    // here and seeks back. play() on the same set later simply starts it.
+    void loadPaused (const StemFiles& files) { load (files); }
+
     void seekFraction (double fraction01);
     void stopIfFinished();
 

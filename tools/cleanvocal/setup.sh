@@ -53,15 +53,34 @@ fi
 # --- venv-restore: audiosr + Apollo's runtime (restore stages) -------------
 # audiosr's requirements are incomplete and partly wrong: it forgets
 # matplotlib, and its pinned librosa 0.9.2 needs pkg_resources, which
-# setuptools 81 removed — hence the extras and the <81 cap.
-if [ -x "$ROOT/venv-restore/bin/audiosr" ]; then
+# setuptools 81 removed — hence the second install and the <81 cap.
+#
+# The skip marker is written only once BOTH installs have landed: the audiosr
+# console script appears after the first, so testing it (as this block once
+# did) let an interruption between the installs resume as "already built"
+# while the venv stayed unimportable.
+if [ -f "$ROOT/venv-restore/.complete" ]; then
     say "venv-restore: already built"
 else
-    say "venv-restore: building (audiosr 0.0.7 + deps it forgot to declare)"
-    "$PY311" -m venv "$ROOT/venv-restore"
-    "$ROOT/venv-restore/bin/pip" install --quiet --upgrade pip
-    "$ROOT/venv-restore/bin/pip" install --quiet "audiosr==0.0.7"
-    "$ROOT/venv-restore/bin/pip" install --quiet "setuptools<81" omegaconf soundfile matplotlib
+    if [ ! -x "$ROOT/venv-restore/bin/audiosr" ]; then
+        say "venv-restore: building (audiosr 0.0.7 + deps it forgot to declare)"
+        "$PY311" -m venv "$ROOT/venv-restore"
+        "$ROOT/venv-restore/bin/pip" install --quiet --upgrade pip
+        "$ROOT/venv-restore/bin/pip" install --quiet "audiosr==0.0.7"
+    fi
+
+    # A root built by the pre-marker script lands here whole but unmarked:
+    # when the forgotten deps already import, it just gains the marker.
+    # Anything else re-runs the dep install, which is fast and idempotent.
+    if "$ROOT/venv-restore/bin/python" -c \
+        "import omegaconf, soundfile, matplotlib, pkg_resources" 2>/dev/null; then
+        say "venv-restore: forgotten deps present"
+    else
+        say "venv-restore: installing the deps audiosr forgot"
+        "$ROOT/venv-restore/bin/pip" install --quiet "setuptools<81" omegaconf soundfile matplotlib
+    fi
+
+    touch "$ROOT/venv-restore/.complete"
 fi
 
 # Always run the bit-rot patches: they are idempotent and sub-second, and

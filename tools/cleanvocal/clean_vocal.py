@@ -58,8 +58,10 @@ for i, o in enumerate(outs):
 
 # Final conform: whatever the last stage produced (AudioSR: one mono 48 kHz
 # file per channel; the others: one file at the input rate) becomes exactly
-# the input's sample rate, channel count and length, 16-bit PCM — the
-# contract's definition of "the same file, cleaned".
+# the input's sample rate, channel count and length, float32 — the
+# contract's definition of "the same file, cleaned". Float32 and unclipped,
+# like every WAV the plugin serves: restoration stages overshoot 0 dBFS,
+# and this pass must not be the one place the chain hard-clips.
 CONFORM_SRC = """
 import sys
 from fractions import Fraction
@@ -84,7 +86,7 @@ if y.shape[1] != ch:
 y = y[:frames]
 if y.shape[0] < frames:
     y = np.pad(y, ((0, frames - y.shape[0]), (0, 0)))
-sf.write(out, np.clip(y, -1.0, 1.0), sr, subtype="PCM_16")
+sf.write(out, y, sr, subtype="FLOAT")
 """
 
 
@@ -205,8 +207,8 @@ class Pipeline:
 
         AudioSR is mono and memory-heavy enough to hit swap on this machine,
         so channels never run in parallel. Returns the per-channel mono
-        48 kHz files; the conform step recombines them so the audio is only
-        quantised to 16-bit once.
+        48 kHz files; the conform step recombines them in one float pass,
+        so nothing on the way to the output is ever quantised.
         """
         chfiles = [self.tmp / f"audiosr-ch{i}.wav" for i in range(channels)]
         run_captured([self.restore_py, "-c", SPLIT_SRC, cur, *chfiles])

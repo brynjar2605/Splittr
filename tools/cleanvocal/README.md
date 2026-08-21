@@ -29,7 +29,9 @@ a failure resumes where it stopped.
 
 Progress and results arrive as `STAGE`/`PROGRESS`/`DONE`/`ERROR` lines on
 stdout (see PROTOCOL.md); everything the models print goes to stderr. The
-output matches the input's sample rate and channel count, 16-bit PCM.
+output matches the input's sample rate and channel count, float32 and never
+clipped — the restoration stages overshoot 0 dBFS, and the plugin's whole
+chain is float32.
 
 ## Files
 

@@ -58,9 +58,21 @@ public:
 
     bool isBusy() const { return isThreadRunning(); }
 
-    // Kill the child and wait for onFinished (cancelled) to have run. Safe
-    // from any thread but the cleaner's own; a no-op when nothing is running.
+    // Kill the child and wait for onFinished to have run. Safe from any
+    // thread but the cleaner's own; a no-op when nothing is running.
+    //
+    // Deliberately a join, not fire-and-forget: the engine's entry-switch
+    // paths call this before letting a SeparationJob loose on the entry, and
+    // the join is what keeps that job's whole-meta write from ever
+    // overlapping the cleaner's own. It stays short — the kill drops the
+    // pipe at once, and run()'s reap of the child is bounded.
     void cancel();
+
+    // True once cancel() has asked the running job to stop. The engine's
+    // onFinished consults this before committing an ok result to disk: the
+    // worker's own last check races the finish, so a cancel that lands as
+    // the child exits still wins where it matters.
+    bool cancelRequested() const { return threadShouldExit(); }
 
     // Block until the current job reports in — the CLI's whole main loop.
     void waitForJob() { waitForThreadToExit (-1); }

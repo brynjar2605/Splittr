@@ -155,12 +155,26 @@ void VocalCleanPanel::paint (juce::Graphics& g)
                 break;
 
             case CleanState::done:
-                line1 = "CLEAN RENDER ACTIVE — AUDITION, DRAG AND EXPORT ALL USE IT";
-                colour1 = theme::accentPale;
-                line2 = "REVERT RETURNS THE RAW VOCALS; THE RENDER IS KEPT FOR NEXT TIME";
+                if (engineState.error.isNotEmpty())
+                {
+                    // A rerun died and the engine restored the previous
+                    // render: the failure needs saying, but so does the fact
+                    // that a clean vocal is still what everyone hears.
+                    line1 = "FAILED — " + ui::upperCased (engineState.error);
+                    colour1 = theme::accentMid;
+                    line2 = "THE PREVIOUS CLEAN RENDER STAYS ACTIVE — TWEAK AND RUN AGAIN";
+                }
+                else
+                {
+                    line1 = "CLEAN RENDER ACTIVE — AUDITION, DRAG AND EXPORT ALL USE IT";
+                    colour1 = theme::accentPale;
+                    line2 = "REVERT RETURNS THE RAW VOCALS; THE RENDER IS KEPT FOR NEXT TIME";
+                }
                 break;
 
             case CleanState::failed:
+                // Failed with no render to fall back to (a failed rerun keeps
+                // the previous render active instead — the `done` case above).
                 line1 = "FAILED — " + ui::upperCased (engineState.error);
                 colour1 = theme::accentMid;
                 line2 = "THE RAW VOCALS ARE UNTOUCHED — TWEAK AND RUN AGAIN";

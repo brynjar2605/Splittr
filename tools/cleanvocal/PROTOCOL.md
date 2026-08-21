@@ -38,7 +38,10 @@ so in the UI; it never attempts setup itself.
   the caller guards with `VocalCleanParams::isNoop()`).
 - `--seed` (default 42) pins AudioSR's sampler so stereo channels and reruns
   agree.
-- Output: same sample rate and channel count as the input, 16-bit PCM WAV.
+- Output: same sample rate and channel count as the input, float32 WAV,
+  never clipped: every WAV the plugin itself serves is float32, and the
+  restoration stages routinely overshoot 0 dBFS, so anything narrower here
+  would make the cleaned render the one clipped file in the chain.
   AudioSR's native output is mono/48k: stereo inputs run once per channel
   with the same seed and recombine; the result is resampled back.
 - Exit 0 on success, non-zero on any failure.

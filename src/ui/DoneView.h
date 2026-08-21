@@ -79,9 +79,6 @@ private:
     bool playing = false;
     int hoveredAction = 0; // 0 none, 1 reveal, 2 export, 3 new file, 4 play/pause, 5 drag all
 
-    // Every rendered WAV in row order — the DRAG ALL payload, refreshed from
-    // each snapshot so reopening a library entry re-points it.
-    juce::StringArray stemPaths;
     bool draggingAll = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DoneView)

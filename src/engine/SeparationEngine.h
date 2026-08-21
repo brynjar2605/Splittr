@@ -81,8 +81,16 @@ struct EngineSnapshot
         float progress = 0.0f;   // running only
         juce::String stage;      // protocol stage name while running
         VocalCleanParams params; // running: in flight; done: what `file` was rendered with
-        juce::File file;         // done: the active render in <entry>/clean/
-        juce::String error;      // failed only
+
+        // done: the active render in <entry>/clean/ — the export-named twin
+        // of the param-keyed cache file, so what leaves the plugin carries
+        // the raw stem's export name and LIST/INFO (issue #11).
+        juce::File file;
+
+        // failed: why the run died. Also set on done when a rerun failed and
+        // the previously active render was restored — the panel shows the
+        // reason beside the render that still stands.
+        juce::String error;
     };
 
     VocalClean vocalClean;
@@ -236,10 +244,15 @@ private:
     bool tryPublishCached (const juce::File& source, int gen, Quality quality);
 
     // Publish a render as the active clean vocal and record the choice in the
-    // entry's meta — the shared tail of a fresh run and a cache hit.
+    // entry's meta — the shared tail of a fresh run and a cache hit. Refreshes
+    // the export-named twin in clean/ from `render` and serves THAT: the cache
+    // file is keyed on its params, but what leaves the plugin must carry the
+    // raw stem's export name and LIST/INFO (issue #11). `songName`/`bpm`/`key`
+    // feed that metadata, mirroring what the raw stems were written with.
     void activateVocalClean (int gen, const juce::String& stemName,
                              const juce::File& stemWav, const VocalCleanParams&,
-                             const juce::File& render);
+                             const juce::File& render, const juce::String& songName,
+                             double bpm, const juce::String& key);
 
     AudioFileIO io;
     ModelManager models;

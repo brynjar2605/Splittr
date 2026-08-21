@@ -6,6 +6,17 @@
 
 using namespace splittr;
 
+// The clean-render swap detector's identity: path plus params, because the
+// export-named file keeps the same name whichever params produced it — a
+// re-activation rewrites it in place, and the audition must reload on that
+// even though the path never moved (issue #29).
+static juce::String cleanKeyFor (const splittr::EngineSnapshot::VocalClean& clean)
+{
+    return clean.state == splittr::EngineSnapshot::VocalClean::State::done
+               ? clean.file.getFullPathName() + "|" + clean.params.toDescriptor()
+               : juce::String();
+}
+
 SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor& p)
     : AudioProcessorEditor (&p), splittrProcessor (p)
 {
@@ -43,6 +54,11 @@ SplittrAudioProcessorEditor::SplittrAudioProcessorEditor (SplittrAudioProcessor&
 
     auto& engine = splittrProcessor.getEngine();
     auto& audition = splittrProcessor.getAudition();
+
+    // A reopened editor joins the session as it stands: without this seed the
+    // first timer tick would read an already-active render as "just changed"
+    // and stop a playing transport for a reload it does not need (issue #29).
+    activeCleanKey = cleanKeyFor (engine.getSnapshot().vocalClean);
 
     idleView.onBrowse = [this] { browseForAudioFile(); };
     idleView.onQualityChange = [&engine] (splittr::Quality q) { engine.setQuality (q); };
@@ -742,16 +758,13 @@ void SplittrAudioProcessorEditor::timerCallback()
 
         // The audition follows the active clean render the moment it lands or
         // reverts: same stem set, the vocals slot swapped, the transport put
-        // back where it was (issue #29).
+        // back where it was — playing or paused (issue #29).
         {
-            const auto cleanNow =
-                snap.vocalClean.state == splittr::EngineSnapshot::VocalClean::State::done
-                    ? snap.vocalClean.file
-                    : juce::File();
+            const auto cleanNow = cleanKeyFor (snap.vocalClean);
 
-            if (cleanNow != activeCleanFile)
+            if (cleanNow != activeCleanKey)
             {
-                activeCleanFile = cleanNow;
+                activeCleanKey = cleanNow;
 
                 if (audition.isLoaded())
                 {
@@ -760,11 +773,14 @@ void SplittrAudioProcessorEditor::timerCallback()
 
                     audition.stop();
 
+                    // A paused transport keeps its place too: the swapped set
+                    // loads without starting, and the seek puts it back.
                     if (wasPlaying)
-                    {
                         audition.play (stemFiles());
-                        audition.seekFraction (fraction);
-                    }
+                    else
+                        audition.loadPaused (stemFiles());
+
+                    audition.seekFraction (fraction);
                 }
             }
         }

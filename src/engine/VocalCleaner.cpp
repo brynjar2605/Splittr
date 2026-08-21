@@ -45,17 +45,23 @@ bool VocalCleaner::start (const juce::File& input, const juce::File& output,
 
 void VocalCleaner::cancel()
 {
-    signalThreadShouldExit();
-
     {
         const juce::ScopedLock sl (childLock);
 
+        // Kill first: the dying child closes the pipe, so the read loop falls
+        // out at once and the join below is bounded by the reap rather than
+        // by however long a model was still going to run. The signal shares
+        // the lock hold so run()'s launch guard can never slip a fresh child
+        // in between the two.
         if (child != nullptr)
             child->kill();
+
+        signalThreadShouldExit();
     }
 
-    // The kill closes the pipe, so the read loop falls out promptly and the
-    // cancelled onFinished has run by the time this returns.
+    // The join is the contract (see the header): callers may rewrite the
+    // entry's meta wholesale the moment this returns, so onFinished must be
+    // completely done — not merely signalled — by then.
     waitForThreadToExit (-1);
 }
 
@@ -188,7 +194,18 @@ void VocalCleaner::run()
     if (pending.isNotEmpty())
         parseLine (pending);
 
-    child->waitForProcessToFinish (10000);
+    // The wait's verdict matters: a child that outlives its closed pipe by
+    // ten seconds is hung and has to be killed, and JUCE's POSIX getExitCode
+    // reads 0 for a child that is still alive or died to a signal — so a
+    // zero on its own proves nothing.
+    const auto exitedInTime = child->waitForProcessToFinish (10000);
+
+    if (! exitedInTime)
+    {
+        child->kill();
+        child->waitForProcessToFinish (2000); // reap the corpse, briefly
+    }
+
     const auto exitCode = child->getExitCode();
 
     {
@@ -203,19 +220,29 @@ void VocalCleaner::run()
         return;
     }
 
-    // The exit code is the verdict; the DONE line only ever confirms it. A
-    // zero exit without the file is still a failure — success is a render.
-    if (exitCode != 0 || ! outputFile.existsAsFile())
+    // Success is earned three ways — a timely, normal exit AND code 0 AND
+    // the protocol's DONE line — because each covers the others' blind spot:
+    // a signal-killed child reads exit code 0, and the output file can exist
+    // half-written under a child we had to kill ourselves. A zero exit
+    // without the file is still a failure — success is a render.
+    if (! exitedInTime || exitCode != 0 || donePath.isEmpty()
+        || ! outputFile.existsAsFile())
     {
         outputFile.deleteFile();
+
+        // A kill of our own, or a signal death wearing exit code 0, outranks
+        // whatever the child managed to say: it did not exit cleanly, and
+        // that is the story.
         finish (Result::failed,
-                errorMessage.isNotEmpty() ? errorMessage
-                : lastNoise.isNotEmpty()  ? lastNoise
-                                          : "sidecar exited with code " + juce::String (exitCode));
+                ! exitedInTime || (exitCode == 0 && donePath.isEmpty())
+                                            ? "the sidecar did not exit cleanly"
+                : errorMessage.isNotEmpty() ? errorMessage
+                : lastNoise.isNotEmpty()    ? lastNoise
+                                            : "sidecar exited with code " + juce::String (exitCode));
         return;
     }
 
-    finish (Result::ok, donePath.isNotEmpty() ? donePath : outputFile.getFullPathName());
+    finish (Result::ok, donePath);
 }
 
 } // namespace splittr
