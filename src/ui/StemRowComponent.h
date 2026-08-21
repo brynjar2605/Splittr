@@ -33,12 +33,22 @@ public:
     // business with — drums, and the summed instrumental (issue #19).
     enum class MidiChip { hidden, idle, busy, done };
 
+    // The CLEAN chip (issue #29), vocals only: same shape as the MIDI chip,
+    // but `active` rather than done because a lit chip means the cleaned
+    // render has taken the raw stem's place, not that an artifact exists.
+    enum class CleanChip { hidden, idle, busy, active };
+
     std::function<void()> onMuteToggle;
     std::function<void (double)> onSeek; // fraction 0..1
 
     // True when the click held a modifier — the only way to re-transcribe a
     // stem that already has a .mid.
     std::function<void (bool)> onMidiClick;
+
+    // Any click on the CLEAN chip: open the clean-vocal panel, whatever state
+    // the chip is in — running and active are exactly when the panel has
+    // something to say (issue #29).
+    std::function<void()> onCleanClick;
 
     // A click on the mix icon: open this stem's shaping panel (issue #9). A
     // drag from the same place is still the file drag-out.
@@ -54,6 +64,8 @@ public:
                  double emberClock);
 
     void setMidi (MidiChip state, const juce::File& midiFile, float progress);
+
+    void setClean (CleanChip state, float progress);
 
     // Marks the mix icon accent: this stem carries processing, so the drag
     // carries it too.
@@ -95,7 +107,8 @@ private:
 
     juce::Rectangle<int> gripBounds() const;
     juce::Rectangle<int> muteButtonBounds() const;
-    juce::Rectangle<int> midiChipBounds() const; // empty while hidden
+    juce::Rectangle<int> midiChipBounds() const;  // empty while hidden
+    juce::Rectangle<int> cleanChipBounds() const; // ditto; sits left of MIDI
     juce::Rectangle<int> waveformBounds() const;
 
     int verticalPad() const;  // tightens on short rows
@@ -117,10 +130,14 @@ private:
     juce::File midiFile;
     float midiProgress = 0.0f;
 
+    CleanChip clean = CleanChip::hidden;
+    float cleanProgress = 0.0f;
+
     bool fxNonFlat = false;
 
     bool hovered = false;
     bool midiHovered = false;
+    bool cleanHovered = false;
     bool gripHovered = false;
     bool draggingOut = false;
 
@@ -128,6 +145,7 @@ private:
     // never becomes the row's WAV drag, and one that starts on the mix icon
     // only opens the panel when it never travelled.
     bool pressedMidi = false;
+    bool pressedClean = false;
     bool pressedGrip = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemRowComponent)

@@ -27,6 +27,13 @@ namespace
         return working ? juce::String::fromUTF8 ("MIDI\xe2\x80\xa6") : juce::String ("MIDI");
     }
 
+    // The CLEAN chip (issue #29) borrows the MIDI chip's metrics wholesale, so
+    // the two read as one family on the vocals row.
+    juce::String cleanLabel (bool working)
+    {
+        return working ? juce::String::fromUTF8 ("CLEAN\xe2\x80\xa6") : juce::String ("CLEAN");
+    }
+
     // The mix icon in the grip column (issue #9): three fader tracks with
     // their caps at different points along them, which is what makes three
     // lines read as a mixer rather than a hamburger.
@@ -94,6 +101,16 @@ void StemRowComponent::setMidi (MidiChip state, const juce::File& file, float pr
     repaint();
 }
 
+void StemRowComponent::setClean (CleanChip state, float progress)
+{
+    if (clean == state && juce::approximatelyEqual (cleanProgress, progress))
+        return;
+
+    clean = state;
+    cleanProgress = progress;
+    repaint();
+}
+
 void StemRowComponent::setFx (bool nonFlat)
 {
     if (fxNonFlat == nonFlat)
@@ -138,6 +155,22 @@ juce::Rectangle<int> StemRowComponent::midiChipBounds() const
 
     return { mute.getX() - midiChipGap - width,
              mute.getCentreY() - midiChipHeight / 2, width, midiChipHeight };
+}
+
+juce::Rectangle<int> StemRowComponent::cleanChipBounds() const
+{
+    if (clean == CleanChip::hidden)
+        return {};
+
+    const auto font = theme::mono (midiChipTextSize, 0.08f);
+    const auto width = (int) std::ceil (ui::textWidth (font, cleanLabel (true))) + 12;
+
+    // Left of the MIDI chip when there is one (on vocals there always is);
+    // straight off the mute cluster otherwise.
+    const auto anchor = midi == MidiChip::hidden ? muteButtonBounds() : midiChipBounds();
+
+    return { anchor.getX() - midiChipGap - width,
+             muteButtonBounds().getCentreY() - midiChipHeight / 2, width, midiChipHeight };
 }
 
 juce::Rectangle<int> StemRowComponent::waveformBounds() const
@@ -248,6 +281,39 @@ void StemRowComponent::paint (juce::Graphics& g)
         g.drawText (midiLabel (working), chip, juce::Justification::centred);
     }
 
+    // --- CLEAN chip: the MIDI chip's grammar, on the vocals row (issue #29) ---
+    if (clean != CleanChip::hidden)
+    {
+        const auto chip = cleanChipBounds();
+        const auto working = clean == CleanChip::busy;
+        const auto active = clean == CleanChip::active;
+
+        if (working)
+        {
+            g.setColour (theme::accentTint15);
+            g.fillRect (chip.toFloat().withWidth ((float) chip.getWidth()
+                                                  * juce::jlimit (0.0f, 1.0f, cleanProgress)));
+        }
+        else if (active)
+        {
+            g.setColour (theme::accentTint15);
+            g.fillRect (chip);
+        }
+
+        g.setColour (active || working ? theme::accentMid
+                     : cleanHovered    ? theme::border35
+                                       : theme::lineSoft15);
+        g.drawRect (chip, 1);
+
+        g.setColour (working ? theme::accentSoft
+                     : active ? theme::accentPale
+                     : cleanHovered ? theme::text
+                                    : theme::text40);
+
+        g.setFont (theme::mono (midiChipTextSize, 0.08f));
+        g.drawText (cleanLabel (working), chip, juce::Justification::centred);
+    }
+
     // --- transport cluster: mute dot + elapsed ---
     {
         const auto mute = muteButtonBounds().toFloat();
@@ -329,6 +395,7 @@ void StemRowComponent::mouseDown (const juce::MouseEvent& e)
 {
     draggingOut = false;
     pressedMidi = midiChipBounds().contains (e.getPosition());
+    pressedClean = cleanChipBounds().contains (e.getPosition());
     pressedGrip = gripBounds().contains (e.getPosition());
 }
 
@@ -349,6 +416,11 @@ void StemRowComponent::mouseDrag (const juce::MouseEvent& e)
         startFileDrag (midiFile);
         return;
     }
+
+    // The CLEAN chip drags nothing at all: what it stands for already rides
+    // the row's own drag once the render is active (issue #29).
+    if (pressedClean)
+        return;
 
     if (! muteButtonBounds().contains (e.getMouseDownPosition()))
         startStemDrag();
@@ -400,6 +472,21 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
             onMidiClick (e.mods.isCommandDown() || e.mods.isAltDown());
 
         pressedMidi = false;
+        pressedClean = false;
+        pressedGrip = false;
+        draggingOut = false;
+        return;
+    }
+
+    if (pressedClean)
+    {
+        // Every state opens the panel: idle to set a run up, busy for its
+        // progress and cancel, active for the revert (issue #29).
+        if (! draggingOut && e.getDistanceFromDragStart() < clickSlop
+            && cleanChipBounds().contains (e.getPosition()) && onCleanClick != nullptr)
+            onCleanClick();
+
+        pressedClean = false;
         pressedGrip = false;
         draggingOut = false;
         return;
@@ -444,19 +531,21 @@ void StemRowComponent::mouseUp (const juce::MouseEvent& e)
 void StemRowComponent::mouseMove (const juce::MouseEvent& e)
 {
     const auto overChip = midiChipBounds().contains (e.getPosition());
+    const auto overClean = cleanChipBounds().contains (e.getPosition());
     const auto overGrip = gripBounds().contains (e.getPosition());
 
     // The mix icon is clicked, a finished chip is dragged, an unstarted one is
-    // clicked, and the rest of the row is the file drag-out; the cursor says
-    // which before the press does.
-    setMouseCursor (overGrip || (overChip && midi == MidiChip::idle)
+    // clicked, the CLEAN chip is always clicked, and the rest of the row is
+    // the file drag-out; the cursor says which before the press does.
+    setMouseCursor (overGrip || overClean || (overChip && midi == MidiChip::idle)
                         ? juce::MouseCursor::PointingHandCursor
                         : juce::MouseCursor::DraggingHandCursor);
 
-    if (overChip == midiHovered && overGrip == gripHovered)
+    if (overChip == midiHovered && overClean == cleanHovered && overGrip == gripHovered)
         return;
 
     midiHovered = overChip;
+    cleanHovered = overClean;
     gripHovered = overGrip;
     repaint();
 }
@@ -467,6 +556,7 @@ void StemRowComponent::mouseExit (const juce::MouseEvent&)
 {
     hovered = false;
     midiHovered = false;
+    cleanHovered = false;
     gripHovered = false;
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     repaint();

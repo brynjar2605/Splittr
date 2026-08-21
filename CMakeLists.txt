@@ -72,7 +72,9 @@ target_sources(Splittr PRIVATE
     src/engine/SpectrumTap.cpp
     src/engine/AuditionPlayer.cpp
     src/engine/TrackAnalyzer.cpp
-    src/ui/TuneView.cpp)
+    src/engine/VocalCleaner.cpp
+    src/ui/TuneView.cpp
+    src/ui/VocalCleanPanel.cpp)
 
 target_include_directories(Splittr PRIVATE src)
 
@@ -143,7 +145,8 @@ target_sources(splittr_cli PRIVATE
     src/engine/AudioFileIO.cpp
     src/engine/DemucsSeparator.cpp
     src/engine/MidiTranscriber.cpp
-    src/engine/TrackAnalyzer.cpp)
+    src/engine/TrackAnalyzer.cpp
+    src/engine/VocalCleaner.cpp)
 
 target_include_directories(splittr_cli PRIVATE src)
 

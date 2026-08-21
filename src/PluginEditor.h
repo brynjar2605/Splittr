@@ -12,6 +12,7 @@
 #include "ui/SettingsView.h"
 #include "ui/LibraryView.h"
 #include "ui/TuneView.h"
+#include "ui/VocalCleanPanel.h"
 
 class SplittrAudioProcessorEditor : public juce::AudioProcessorEditor,
                                     public juce::DragAndDropContainer,
@@ -62,6 +63,7 @@ private:
     splittr::DoneView doneView;
     splittr::ConfirmView confirmView;   // overlays the above while confirming
     splittr::TuneView tuneView;         // per-stem shaping, opened from a row's mix icon
+    splittr::VocalCleanPanel cleanPanel; // clean vocal (issue #29), from the CLEAN chip
     splittr::LibraryView libraryView;   // cache browser, opened from the idle screen
     splittr::SettingsView settingsView; // prefs, opened from the header mark
     splittr::DiagnosticsView diagView;  // the copyable report, opened from settings
@@ -76,7 +78,13 @@ private:
     bool showSettings = false;
     bool showLibrary = false;
     bool showTune = false; // only meaningful while the done view is up
+    bool showClean = false; // ditto (issue #29)
     bool showDiag = false; // sits above settings, which stays open behind it
+
+    // The clean render the audition currently plays instead of the raw
+    // vocals; empty when it plays the raw stem. Tracked so the transport can
+    // be reloaded the moment a render activates or reverts (issue #29).
+    juce::File activeCleanFile;
 
     // The stem set the mute defaults were last applied to (vocals +
     // instrumental audible, sources muted): re-applied only when the set

@@ -10,6 +10,7 @@
 #include "ModelManager.h"
 #include "StemCache.h" // StemIndex / stemOrderFor
 #include "StemFx.h"
+#include "VocalCleaner.h"
 
 namespace splittr
 {
@@ -63,6 +64,28 @@ struct EngineSnapshot
     // Display order for the mode that produced them: five stems for the
     // 4-source modes, seven for 6-stem. Empty until a run completes.
     std::vector<StemInfo> stems;
+
+    // The vocal stem's offline clean chain (issue #29). One block on the
+    // snapshot rather than a per-stem field: the feature is vocals-only by
+    // design, and the sidecar can run exactly one job at a time anyway.
+    //
+    // `done` means ACTIVE — the render in `file` has taken the raw vocals'
+    // place in audition, drag and export until reverted. notSetUp is the
+    // sidecar runtime missing, which the panel phrases as an install hint
+    // rather than an error.
+    struct VocalClean
+    {
+        enum class State { none, notSetUp, running, done, failed };
+
+        State state = State::none;
+        float progress = 0.0f;   // running only
+        juce::String stage;      // protocol stage name while running
+        VocalCleanParams params; // running: in flight; done: what `file` was rendered with
+        juce::File file;         // done: the active render in <entry>/clean/
+        juce::String error;      // failed only
+    };
+
+    VocalClean vocalClean;
 
     // demucs source order (drums, bass, other, vocals[, guitar, piano]) — the
     // working view's source table reads it positionally.
@@ -122,7 +145,29 @@ public:
     // the first drag after a tweak pays a beat and the rest are instant. Falls
     // back to the raw stem if the bounce cannot be written, and returns an
     // empty File when there is no such stem to hand over.
+    //
+    // An active clean render (issue #29) is the vocals' SOURCE here: it is
+    // what a flat stem hands over, and what a shaped one bounces from.
     juce::File processedStemFile (int stemIndex);
+
+    // CLEAN VOCAL (issue #29): run the vocals stem through the offline
+    // sidecar, or re-activate instantly when a render for these exact params
+    // is already in <entry>/clean/. Only meaningful in Ready; a no-op while a
+    // clean job is running, and for params that ask for nothing.
+    void requestVocalClean (const VocalCleanParams&);
+
+    // Kill the running sidecar; the previously active render (if any) comes
+    // back. A no-op when nothing is running.
+    void cancelVocalClean();
+
+    // Back to the raw render everywhere, and forget the choice in meta.xml.
+    // The cached file stays on disk, so re-activating the same params later
+    // is instant. Also how the panel dismisses a failed / not-set-up state.
+    void revertVocalClean();
+
+    // True when the sidecar runtime is installed — forwards to VocalCleaner
+    // so the UI keeps talking to the engine layer, the gpuAvailable pattern.
+    static bool vocalCleanSetUp();
 
     void requestCancel();
     void requestNewFile();                        // done -> idle
@@ -190,8 +235,20 @@ private:
 
     bool tryPublishCached (const juce::File& source, int gen, Quality quality);
 
+    // Publish a render as the active clean vocal and record the choice in the
+    // entry's meta — the shared tail of a fresh run and a cache hit.
+    void activateVocalClean (int gen, const juce::String& stemName,
+                             const juce::File& stemWav, const VocalCleanParams&,
+                             const juce::File& render);
+
     AudioFileIO io;
     ModelManager models;
+    VocalCleaner cleaner;
+
+    // meta.xml is rewritten from the message thread (fx commits) and the
+    // cleaner's thread (a finished run); the writes are parse-and-write, so
+    // unserialised they could drop each other's attributes.
+    juce::CriticalSection metaLock;
 
     std::atomic<int> generation { 0 };
     std::atomic<bool> autoDownloadTried { false };

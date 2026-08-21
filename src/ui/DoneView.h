@@ -40,6 +40,9 @@ public:
     // whose .mid already exists.
     std::function<void (int, bool)> onMidi;
 
+    // A click on the vocals row's CLEAN chip: open the clean panel (issue #29).
+    std::function<void (int)> onClean;
+
     // A click on a row's mix icon: open that stem's shaping panel (issue #9).
     std::function<void (int)> onTune;
 
