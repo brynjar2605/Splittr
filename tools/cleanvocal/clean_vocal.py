@@ -260,6 +260,22 @@ def resolve_root(arg_root):
 def main(argv):
     args = parse_args(argv)
 
+    # The plugin launches this from a GUI process whose PATH is the bare
+    # launchd default — no /opt/homebrew/bin — and audio-separator shells out
+    # to ffmpeg by name (issue #30: every in-plugin run died at the first
+    # separator stage while every terminal run passed). The sidecar owns its
+    # children's environment, so it repairs PATH here rather than asking every
+    # host to; and when ffmpeg is genuinely absent the run should fail as one
+    # protocol ERROR naming the fix, not as a traceback out of a grandchild.
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    for extra in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if extra not in path_dirs and Path(extra).is_dir():
+            path_dirs.append(extra)
+    os.environ["PATH"] = os.pathsep.join(p for p in path_dirs if p)
+    if shutil.which("ffmpeg") is None:
+        fail("ffmpeg not found on PATH (audio-separator needs it) — "
+             "brew install ffmpeg")
+
     root = resolve_root(args.root)
     for needed in ("venv-sep/bin/audio-separator", "venv-restore/bin/python"):
         if not (root / needed).exists():
